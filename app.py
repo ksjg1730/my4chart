@@ -35,21 +35,32 @@ def draw_chart():
     cols = st.columns(4)
     colors = ['#FFD700', '#EF553B', '#00CC96', '#636EFA'] # 은색/금색 느낌을 위해 첫번째 색상 변경
 
+ # ... (앞부분 생략)
+
     for i, (symbol, name) in enumerate(tickers.items()):
         # 최근 1개월 데이터 (30분봉)
         df = yf.download(symbol, period='1mo', interval='30m', progress=False)
         if df.empty: continue
         
-        # 중요: yfinance의 글로벌 데이터는 UTC 기준이므로 한국 시간(KST)으로 변환
+        # 한국 시간 변환
         df.index = df.index.tz_convert('Asia/Seoul')
         
+        # [수정 포인트 1] 데이터프레임 구조 단순화 (멀티인덱스 제거)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
         # 수익률 계산
         base_df = df[df.index <= ref_time]
-        # 기준 시점 데이터가 없을 경우 가장 가까운 과거 데이터 사용
-        base_price = base_df['Close'].iloc[-1] if not base_df.empty else df['Close'].iloc[0]
-        
+        if not base_df.empty:
+            base_price = base_df['Close'].iloc[-1]
+        else:
+            base_price = df['Close'].iloc[0]
+            
+        # 수익률 계산 (float 타입 보장)
         df['Return'] = ((df['Close'] - base_price) / base_price * 100)
-        current_return = df['Return'].iloc[-1].values[0]
+        
+        # [수정 포인트 2] 마지막 수익률 값 안전하게 가져오기
+        current_return = float(df['Return'].iloc[-1])
 
         # 상단 지표 표시
         cols[i].metric(label=name, value=f"{current_return:+.2f}%")
@@ -62,6 +73,8 @@ def draw_chart():
             name=name,
             line=dict(width=2, color=colors[i])
         ))
+        
+# ... (뒷부분 생략)
 
     fig.update_layout(
         hovermode="x unified",
