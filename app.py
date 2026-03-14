@@ -5,21 +5,20 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # 페이지 설정
-st.set_page_config(page_title="ETF 수익률 비교 대시보드", layout="wide")
+st.set_page_config(page_title="글로벌 자산 수익률 비교", layout="wide")
 
-st.title("📊 ETF 실시간 수익률 비교")
-st.sidebar.header("설정")
+st.title("📊 글로벌 은 선물 vs 국내 ETF 수익률 비교")
 
-# 1. 종목 설정
+# 1. 종목 설정 (반도체 레버리지 -> 글로벌 은 선물로 변경)
 tickers = {
+    'SI=F': '글로벌 은 선물 (COMEX)',  # 글로벌 데이터로 변경
     '144600.KS': 'KODEX 은선물(H)',
     '261250.KS': 'KODEX 달러레버리지',
-    '233740.KS': 'KODEX 코스닥150레버리지',
-    '494310.KS': 'KODEX 반도체레버리지'
+    '233740.KS': 'KODEX 코스닥150레버리지'
 }
 
-# 2. 기준 시간 계산 함수
 def get_reference_time():
+    """최근 금요일 12:00 (KST) 계산"""
     today = datetime.now()
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
@@ -29,41 +28,28 @@ def get_reference_time():
 
 ref_time = get_reference_time()
 
-# 사이드바 정보
-st.sidebar.write(f"**기준 시간:** \n{ref_time.strftime('%Y-%m-%d %H:%M')}")
-st.sidebar.write("*(최근 금요일 12:00 기준)*")
-update_interval = st.sidebar.selectbox("갱신 주기", [60, 300, 600], index=0, format_func=lambda x: f"{x}초")
-
 # 3. 데이터 로드 및 시각화
-@st.fragment(run_every=update_interval)
+@st.fragment(run_every=60)
 def draw_chart():
     fig = go.Figure()
     cols = st.columns(4)
-    
-    colors = ['#EF553B', '#00CC96', '#636EFA', '#AB63FA']
+    colors = ['#FFD700', '#EF553B', '#00CC96', '#636EFA'] # 은색/금색 느낌을 위해 첫번째 색상 변경
 
     for i, (symbol, name) in enumerate(tickers.items()):
-        # 데이터 수집
+        # 최근 1개월 데이터 (30분봉)
         df = yf.download(symbol, period='1mo', interval='30m', progress=False)
         if df.empty: continue
         
-        # 다중 인덱스(Multi-index) 해결: 열 이름이 (Price, Ticker) 형태인 경우 'Price'만 남김
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
+        # 중요: yfinance의 글로벌 데이터는 UTC 기준이므로 한국 시간(KST)으로 변환
         df.index = df.index.tz_convert('Asia/Seoul')
         
         # 수익률 계산
         base_df = df[df.index <= ref_time]
-        # 데이터가 비어있을 경우를 대비한 예외 처리
+        # 기준 시점 데이터가 없을 경우 가장 가까운 과거 데이터 사용
         base_price = base_df['Close'].iloc[-1] if not base_df.empty else df['Close'].iloc[0]
         
-        # 수익률 계산 및 값 추출 (float으로 변환하여 차원 문제 해결)
-        returns = ((df['Close'] - base_price) / base_price * 100)
-        df['Return'] = returns
-        
-        # 마지막 수익률 값 안전하게 가져오기
-        current_return = float(df['Return'].iloc[-1])
+        df['Return'] = ((df['Close'] - base_price) / base_price * 100)
+        current_return = df['Return'].iloc[-1].values[0]
 
         # 상단 지표 표시
         cols[i].metric(label=name, value=f"{current_return:+.2f}%")
@@ -77,18 +63,17 @@ def draw_chart():
             line=dict(width=2, color=colors[i])
         ))
 
-    # (이후 레이아웃 설정 코드는 동일합니다)
     fig.update_layout(
         hovermode="x unified",
         height=600,
-        margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="날짜/시간"),
+        xaxis=dict(title="시간 (KST)"),
         yaxis=dict(title="수익률 (%)", zeroline=True, zerolinewidth=2, zerolinecolor='Black'),
         template='plotly_white'
     )
-    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dot", line_color="green", annotation_text="기준점")
+    
+    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dot", line_color="green")
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption(f"기준 시간: {ref_time.strftime('%Y-%m-%d %H:%M')} | 마지막 갱신: {datetime.now().strftime('%H:%M:%S')}")
 
 draw_chart()
