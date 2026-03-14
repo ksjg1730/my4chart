@@ -35,27 +35,37 @@ st.sidebar.write("*(최근 금요일 12:00 기준)*")
 update_interval = st.sidebar.selectbox("갱신 주기", [60, 300, 600], index=0, format_func=lambda x: f"{x}초")
 
 # 3. 데이터 로드 및 시각화
-@st.fragment(run_every=update_interval) # 지정된 초마다 이 부분만 다시 실행
+@st.fragment(run_every=update_interval)
 def draw_chart():
     fig = go.Figure()
-    cols = st.columns(4) # 상단에 현재 수익률 표시용
+    cols = st.columns(4)
     
     colors = ['#EF553B', '#00CC96', '#636EFA', '#AB63FA']
 
     for i, (symbol, name) in enumerate(tickers.items()):
-        # 최근 1개월 데이터
+        # 데이터 수집
         df = yf.download(symbol, period='1mo', interval='30m', progress=False)
         if df.empty: continue
         
+        # 다중 인덱스(Multi-index) 해결: 열 이름이 (Price, Ticker) 형태인 경우 'Price'만 남김
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
         df.index = df.index.tz_convert('Asia/Seoul')
         
         # 수익률 계산
         base_df = df[df.index <= ref_time]
+        # 데이터가 비어있을 경우를 대비한 예외 처리
         base_price = base_df['Close'].iloc[-1] if not base_df.empty else df['Close'].iloc[0]
-        df['Return'] = ((df['Close'] - base_price) / base_price * 100)
-        current_return = df['Return'].iloc[-1].values[0]
+        
+        # 수익률 계산 및 값 추출 (float으로 변환하여 차원 문제 해결)
+        returns = ((df['Close'] - base_price) / base_price * 100)
+        df['Return'] = returns
+        
+        # 마지막 수익률 값 안전하게 가져오기
+        current_return = float(df['Return'].iloc[-1])
 
-        # 상단 지표(Metric) 표시
+        # 상단 지표 표시
         cols[i].metric(label=name, value=f"{current_return:+.2f}%")
 
         # 메인 그래프 추가
@@ -67,7 +77,7 @@ def draw_chart():
             line=dict(width=2, color=colors[i])
         ))
 
-    # 그래프 레이아웃
+    # (이후 레이아웃 설정 코드는 동일합니다)
     fig.update_layout(
         hovermode="x unified",
         height=600,
@@ -77,11 +87,7 @@ def draw_chart():
         yaxis=dict(title="수익률 (%)", zeroline=True, zerolinewidth=2, zerolinecolor='Black'),
         template='plotly_white'
     )
-    
-    # 기준선 세로줄
-    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dot", line_color="green", 
-                  annotation_text="기준점")
-
+    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dot", line_color="green", annotation_text="기준점")
     st.plotly_chart(fig, use_container_width=True)
     st.caption(f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
