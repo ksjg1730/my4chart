@@ -5,14 +5,14 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="글로벌 자산 수익률 비교", layout="wide")
+st.set_page_config(page_title="달러 인덱스 vs 국내 ETF 비교", layout="wide")
 
-st.title("📊 글로벌 은 선물 vs 국내 ETF 수익률 비교")
+st.title("📊 글로벌 달러 인덱스 vs 국내 ETF 수익률 비교")
 
-# 2. 종목 설정
+# 2. 종목 설정 (글로벌 은 선물 -> 달러 인덱스로 변경)
 tickers = {
-    'SI=F': '글로벌 은 선물 (COMEX)',
-    '144600.KS': 'KODEX 은선물(H)',
+    'DX=F': '달러 인덱스 선물 (ICE)',  # 글로벌 달러 인덱스
+   'SI=F': '글로벌 은 선물 (COMEX)'
     '261250.KS': 'KODEX 달러레버리지',
     '233740.KS': 'KODEX 코스닥150레버리지'
 }
@@ -28,81 +28,31 @@ def get_reference_time():
 
 ref_time = get_reference_time()
 
-# 3. 차트 그리기 (Fragment를 사용하여 60초마다 부분 갱신)
+# 3. 차트 그리기
 @st.fragment(run_every=60)
 def draw_chart():
     fig = go.Figure()
     cols = st.columns(4)
-    colors = ['#FFD700', '#EF553B', '#00CC96', '#636EFA']
+    # 달러 인덱스를 강조하기 위해 첫 번째 색상을 감청색으로 변경
+    colors = ['#1F77B4', '#EF553B', '#00CC96', '#636EFA']
 
-    # 모든 종목의 데이터를 담을 리스트 (시간 범위 파악용)
     all_data_indices = []
 
     for i, (symbol, name) in enumerate(tickers.items()):
-        # 데이터 수집
+        # 데이터 수집 (최근 1개월, 30분봉)
         df = yf.download(symbol, period='1mo', interval='30m', progress=False)
         if df.empty: continue
         
-        # 멀티인덱스 컬럼 문제 해결 (AttributeError 방지 핵심)
+        # 멀티인덱스 컬럼 문제 해결
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         
-        # 시간대 변환
+        # 시간대 변환 (KST)
         df.index = df.index.tz_convert('Asia/Seoul')
         all_data_indices.append(df.index)
         
-        # 수익률 계산 (금요일 12:00 기준)
+        # 수익률 계산 (기준점: 금요일 12:00)
         base_df = df[df.index <= ref_time]
         base_price = float(base_df['Close'].iloc[-1]) if not base_df.empty else float(df['Close'].iloc[0])
         
-        df['Return'] = ((df['Close'] - base_price) / base_price * 100)
-        current_return = float(df['Return'].iloc[-1])
-
-        # 상단 지표 표시
-        cols[i].metric(label=name, value=f"{current_return:+.2f}%")
-
-        # 라인 추가
-        fig.add_trace(go.Scatter(
-            x=df.index, 
-            y=df['Return'],
-            mode='lines',
-            name=name,
-            line=dict(width=2, color=colors[i])
-        ))
-
-    # 4. 월요일 오전 09:00 수직선 추가
-    if all_data_indices:
-        full_range = all_data_indices[0] # 첫 번째 종목의 인덱스 기준
-        start_date = full_range.min()
-        end_date = full_range.max()
-        
-        curr = start_date.replace(hour=9, minute=0, second=0)
-        while curr <= end_date:
-            if curr.weekday() == 0: # 0: 월요일
-                fig.add_vline(
-                    x=curr.timestamp() * 1000, 
-                    line_width=1, 
-                    line_dash="solid", 
-                    line_color="rgba(128, 128, 128, 0.4)", # 연한 회색 실선
-                    annotation_text="Mon 09:00",
-                    annotation_position="top left"
-                )
-            curr += timedelta(days=1)
-
-    # 5. 기준선(금요일 12시) 및 레이아웃 설정
-    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dash", line_color="green", line_width=2)
-    fig.add_hline(y=0, line_color="black", line_width=1, opacity=0.3)
-    
-    fig.update_layout(
-        hovermode="x unified",
-        height=600,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="날짜 (KST)"),
-        yaxis=dict(title="수익률 (%)"),
-        template='plotly_white'
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (60초 간격 자동 갱신)")
-
-draw_chart()
+        df['Return'] = ((df['Close'] - base_price) / base_price
