@@ -5,10 +5,9 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="통합 수익률 대시보드", layout="wide")
+st.set_page_config(page_title="주간 수익률 대시보드", layout="wide")
 
-st.title("📊 자산별 주간/월간 수익률 통합 분석")
-st.info("💡 차트는 **이번 주(월요일 09:00 기준)** 수익률이며, 상단 지표에서 **이번 달(월초 기준)** 성적을 함께 확인하세요.")
+st.title("📊 자산별 주간 수익률 분석 (월요일 09:00 리셋)")
 
 # 2. 종목 설정
 tickers = {
@@ -20,16 +19,16 @@ tickers = {
 
 @st.cache_data(ttl=600)
 def load_data(symbol):
-    # 월간 계산을 위해 2개월치 데이터 로드
-    df = yf.download(symbol, period='2mo', interval='30m', progress=False)
+    # 주간 데이터 확인을 위해 1개월치 로드
+    df = yf.download(symbol, period='1mo', interval='30m', progress=False)
     if not df.empty:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.index = df.index.tz_convert('Asia/Seoul')
     return df
 
-# 3. 데이터 처리 및 차트 생성
-def draw_integrated_dashboard():
+# 3. 차트 생성 함수
+def draw_dashboard():
     fig = go.Figure()
     cols = st.columns(len(tickers))
     colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
@@ -40,42 +39,31 @@ def draw_integrated_dashboard():
         if df_raw.empty: continue
         df = df_raw.copy()
 
-        # --- A. 주간 기준가 계산 (이번 주 월요일 09:00) ---
+        # 월요일 09:00 기준가 찾기
         monday_bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
         
-        # --- B. 월간 기준가 계산 (이번 달 초 개장) ---
-        df['month_val'] = df.index.month
-        month_bases = df[df['month_val'] != df['month_val'].shift(1)]
-
-        def get_ref_price(ts, base_df):
-            past = base_df[base_df.index <= ts]
+        def get_ref_price(ts):
+            past = monday_bases[monday_bases.index <= ts]
             return float(past['Close'].iloc[-1]) if not past.empty else float(df['Close'].iloc[0])
 
-        # 주간/월간 수익률 계산
-        df['Weekly_Base'] = [get_ref_price(ts, monday_bases) for ts in df.index]
-        df['Monthly_Base'] = [get_ref_price(ts, month_bases) for ts in df.index]
-        
-        week_raw = ((df['Close'] - df['Weekly_Base']) / df['Weekly_Base'] * 100)
-        month_raw = ((df['Close'] - df['Monthly_Base']) / df['Monthly_Base'] * 100)
+        # 수익률 계산
+        df['Base_Price'] = [get_ref_price(ts) for ts in df.index]
+        raw_return = ((df['Close'] - df['Base_Price']) / df['Base_Price'] * 100)
 
         # 가중치 설정
         weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
-        df['Weekly_Ret'] = week_raw * weight
-        df['Monthly_Ret'] = month_raw * weight
+        df['Return'] = raw_return * weight
         
-        curr_week = float(df['Weekly_Ret'].iloc[-1])
-        curr_month = float(df['Monthly_Ret'].iloc[-1])
+        curr_ret = float(df['Return'].iloc[-1])
+        display_name = f"{name} (5x)" if symbol == 'DX-Y.NYB' else (f"{name} (2x)" if symbol == 'SI=F' else name)
 
-        # --- 상단 지표 표시 ---
-        with cols[i]:
-            st.markdown(f"**{name}**")
-            st.metric(label="이번주(가중)", value=f"{curr_week:+.2f}%")
-            st.metric(label="이번달(가중)", value=f"{curr_month:+.2f}%")
+        # 상단 지표 표시
+        cols[i].metric(label=display_name, value=f"{curr_ret:+.2f}%")
 
-        # --- 차트 추가 ---
+        # 차트 선 추가
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['Weekly_Ret'],
-            mode='lines', name=name,
+            x=df.index, y=df['Return'],
+            mode='lines', name=display_name,
             line=dict(width=2, color=colors[i])
         ))
         all_indices.append(df.index)
@@ -99,9 +87,9 @@ def draw_integrated_dashboard():
         legend=dict(orientation="h", y=1.02, x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True, key="integrated_chart")
+    st.plotly_chart(fig, use_container_width=True)
 
-draw_integrated_dashboard()
+# 실행
+draw_dashboard()
 
-# 마지막 줄 수정됨
-st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 데이터: yfinance 30분봉 | 가중치(2x, 5x) 반영됨")
+st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 기준: 매주 월요일 09:00 리셋 | 데이터: yfinance 30분봉")
