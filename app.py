@@ -5,9 +5,9 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="주간 수익률 비교 대시보드", layout="wide")
+st.set_page_config(page_title="주간/월간 수익률 대시보드", layout="wide")
 
-st.title("📊 주간 단위 수익률 초기화 차트 (월요일 09:00 기준)")
+st.title("📊 자산별 수익률 분석 (주간 & 월간 리셋)")
 
 # 2. 종목 설정
 tickers = {
@@ -17,56 +17,55 @@ tickers = {
     '233740.KS': 'KODEX 코스닥150레버리지'
 }
 
-# 3. 차트 그리기
-@st.fragment(run_every=60)
-def draw_chart():
-    fig = go.Figure()
-    cols = st.columns(len(tickers))
-    colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96'] 
-
-    all_data_indices = []
-
-    for i, (symbol, name) in enumerate(tickers.items()):
-        # 최근 1개월 데이터 수집
-        df = yf.download(symbol, period='1mo', interval='30m', progress=False)
-        if df.empty: continue
-        
+# 데이터 수집 함수 (캐싱 활용하여 속도 향상)
+@st.cache_data(ttl=600)
+def load_data(symbol):
+    df = yf.download(symbol, period='2mo', interval='30m', progress=False)
+    if not df.empty:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        
         df.index = df.index.tz_convert('Asia/Seoul')
-        all_data_indices.append(df.index)
-        
-        # --- 주차별 기준가(Base Price) 동적 계산 로직 ---
-        # 1. 월요일 09:00 시점들만 추출
-        monday_opens = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
-        
-        # 2. 각 데이터 포인트에 대해 해당 시점 '이전'의 가장 가까운 월요일 9시 가격을 기준가로 설정
-        def get_weekly_base_price(current_time):
-            # 현재 시점보다 이전이거나 같은 월요일 9시 데이터들을 필터링
-            past_mondays = monday_opens[monday_opens.index <= current_time]
-            if not past_mondays.empty:
-                return float(past_mondays['Close'].iloc[-1]) # 가장 최근 월요일 9시 가격
-            else:
-                return float(df['Close'].iloc[0]) # 데이터 시작점에 월요일이 없으면 첫 가격 사용
+    return df
 
-        # 3. 모든 행에 대해 기준가 적용 (이 부분은 데이터가 많으면 속도가 느릴 수 있어 벡터화 권장되나 가독성을 위해 명시적 처리)
-        # 실제로는 merge_asof 등을 쓰면 빠르지만, 30분봉 한달치이므로 loop로도 충분합니다.
-        base_prices = []
-        for ts in df.index:
-            base_prices.append(get_reference_for_timestamp(ts, monday_opens, df))
+# 3. 메인 화면 구성
+tab1, tab2 = st.tabs(["📅 주간 기준 (월요일 09:00)", "📆 월간 기준 (월초 개장)"])
+
+def create_chart(mode='weekly'):
+    fig = go.Figure()
+    cols = st.columns(len(tickers))
+    colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
+    all_indices = []
+
+    for i, (symbol, name) in enumerate(tickers.items()):
+        df = load_data(symbol)
+        if df.empty: continue
         
-        df['Base_Price'] = base_prices
-        
-        # 4. 수익률 및 가중치 계산
+        # --- 기준가 계산 로직 ---
+        if mode == 'weekly':
+            # 매주 월요일 09:00 가격 찾기
+            bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
+            reset_label = "Mon 09:00"
+        else:
+            # 매월 1일(또는 월초 첫 거래일) 09:00 가격 찾기
+            # 일(day)이 이전 행보다 작아지는 지점이 월이 바뀌는 지점
+            df['day'] = df.index.day
+            bases = df[df['day'] != df['day'].shift(1)].resample('MS').first() # 월초 데이터 샘플링
+            # 실제 데이터 내 월초 첫 9시 가격 추출
+            bases = df[df.index.isin(df.index.to_series().resample('MS').first())] 
+            reset_label = "Month Start"
+
+        def get_base_price(ts):
+            past_bases = bases[bases.index <= ts]
+            return float(past_bases['Close'].iloc[-1]) if not past_bases.empty else float(df['Close'].iloc[0])
+
+        # 기준가 적용 및 수익률 계산
+        df['Base_Price'] = [get_base_price(ts) for ts in df.index]
         raw_return = ((df['Close'] - df['Base_Price']) / df['Base_Price'] * 100)
         
-        if symbol == 'DX-Y.NYB':
-            df['Return'] = raw_return * 5
-        elif symbol == 'SI=F':
-            df['Return'] = raw_return * 2
-        else:
-            df['Return'] = raw_return
+        # 가중치 적용
+        if symbol == 'DX-Y.NYB': df['Return'] = raw_return * 5
+        elif symbol == 'SI=F': df['Return'] = raw_return * 2
+        else: df['Return'] = raw_return
             
         current_return = float(df['Return'].iloc[-1])
         cols[i].metric(label=name, value=f"{current_return:+.2f}%")
@@ -76,42 +75,38 @@ def draw_chart():
             mode='lines', name=name,
             line=dict(width=2, color=colors[i])
         ))
+        all_indices.append(df.index)
 
-    # 4. 월요일 오전 09:00 수직선 (구분선)
-    if all_data_indices:
-        start_date = min([idx.min() for idx in all_data_indices])
-        end_date = max([idx.max() for idx in all_data_indices])
-        curr = start_date.replace(hour=9, minute=0, second=0)
-        while curr <= end_date:
-            if curr.weekday() == 0:
-                fig.add_vline(
-                    x=curr.timestamp() * 1000, 
-                    line_width=2, 
-                    line_dash="solid", 
-                    line_color="rgba(200, 0, 0, 0.3)", # 주간 경계선 (붉은색 계열)
-                    annotation_text=curr.strftime('%m%d'),
-                    annotation_position="top left"
-                )
-            curr += timedelta(days=1)
+    # 수직선 추가 (리셋 지점)
+    if all_indices:
+        start_date, end_date = all_indices[0].min(), all_indices[0].max()
+        if mode == 'weekly':
+            curr = start_date.replace(hour=9, minute=0, second=0)
+            while curr <= end_date:
+                if curr.weekday() == 0:
+                    fig.add_vline(x=curr.timestamp()*1000, line_dash="solid", line_color="rgba(200,0,0,0.2)", 
+                                  annotation_text=curr.strftime('%m%d'))
+                curr += timedelta(days=1)
+        else:
+            # 월초 지점 실선 표시
+            for b_ts in bases.index:
+                if b_ts >= start_date:
+                    fig.add_vline(x=b_ts.timestamp()*1000, line_dash="solid", line_color="rgba(0,0,200,0.2)",
+                                  annotation_text=b_ts.strftime('%m월'))
 
-    fig.add_hline(y=0, line_color="black", line_width=1, opacity=0.5)
-    
-    fig.update_layout(
-        hovermode="x unified", height=650,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="날짜", tickformat="%m%d\n%H:%M", dtick=86400000.0),
-        yaxis=dict(title="주간 수익률 (%)"),
-        template='plotly_white'
-    )
-
+    fig.add_hline(y=0, line_color="black", opacity=0.5)
+    fig.update_layout(hovermode="x unified", height=600, template='plotly_white',
+                      xaxis=dict(tickformat="%m%d\n%H:%M", dtick=86400000.0),
+                      legend=dict(orientation="h", y=1.02, x=1))
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 각 주차 월요일 09:00에 수익률이 0%로 리셋됩니다.")
 
-def get_reference_for_timestamp(ts, monday_opens, full_df):
-    """특정 시점 ts에 대해 적용할 기준 월요일 가격을 반환"""
-    past_mondays = monday_opens[monday_opens.index <= ts]
-    if not past_mondays.empty:
-        return float(past_mondays['Close'].iloc[-1])
-    return float(full_df['Close'].iloc[0])
+# 탭별 출력
+with tab1:
+    st.subheader("이번 주 성적 (매주 월요일 09:00 리셋)")
+    create_chart(mode='weekly')
 
-draw_chart()
+with tab2:
+    st.subheader("이번 달 성적 (매월 초 개장 시점 리셋)")
+    create_chart(mode='monthly')
+
+st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 데이터: yfinance 30분봉")
