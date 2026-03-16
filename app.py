@@ -5,20 +5,20 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="글로벌 자산 수익률 대시보드", layout="wide")
+st.set_page_config(page_title="수익률 분석 대시보드", layout="wide")
 
-# 2. 사이드바 메뉴
-st.sidebar.title("📌 기준 선택")
-mode = st.sidebar.radio("수익률 리셋 기준:", ["주간 리셋 (월 09:00)", "월간 리셋 (월초 09:00)"])
+# 2. 사이드바 메뉴 (화면 전환)
+st.sidebar.title("📌 메뉴 선택")
+mode = st.sidebar.radio("보고 싶은 기준을 선택하세요:", ["주간 리셋 (월 09:00)", "월간 리셋 (월초 09:00)"])
 
-st.title(f"📊 글로벌 주요 자산 {mode} 분석")
+st.title(f"📊 자산별 {mode} 분석")
 
-# 3. 종목 설정 (4번에 SOXX 반도체 지수 추가)
+# 3. 종목 설정
 tickers = {
     'CL=F': 'WTI 원유 선물',
     'SI=F': '글로벌 은 선물 (2x)',
     'DX-Y.NYB': 'DXY 달러지수 (5x)',
-    'SOXX': '필라델피아 반도체(SOXX)' # 4번 항목 교체
+      'SOXX': '필라델피아 반도체(SOXX)' # 4번 항목 교체
 }
 
 @st.cache_data(ttl=600)
@@ -31,12 +31,11 @@ def load_data(symbol):
         df.index = df.index.tz_convert('Asia/Seoul')
     return df
 
-# 4. 차트 및 지표 생성 함수
+# 4. 차트 생성 함수
 def draw_dashboard(selection):
     fig = go.Figure()
     cols = st.columns(len(tickers))
-    # 각 종목별 고유 색상 (검정, 금색, 빨강, 파랑)
-    colors = ['#333333', '#FFD700', '#FF4B4B', '#1A237E']
+    colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
     all_indices = []
 
     for i, (symbol, name) in enumerate(tickers.items()):
@@ -46,11 +45,11 @@ def draw_dashboard(selection):
 
         # --- 기준점 설정 로직 ---
         if "주간" in selection:
-            # 매주 월요일 09:00 기준
+            # 매주 월요일 09:00
             bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
             label_format = '%m%d'
         else:
-            # 매월 초 첫 데이터 기준
+            # 매월 초 첫 데이터 (날짜가 바뀌는 시점)
             df['m_val'] = df.index.month
             bases = df[df['m_val'] != df['m_val'].shift(1)]
             label_format = '%m월'
@@ -63,7 +62,7 @@ def draw_dashboard(selection):
         df['Base_Price'] = [get_ref_price(ts) for ts in df.index]
         raw_return = ((df['Close'] - df['Base_Price']) / df['Base_Price'] * 100)
 
-        # 가중치 설정 (달러 5배, 은 2배, 나머지는 1배)
+        # 가중치 설정
         weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
         df['Return'] = raw_return * weight
         
@@ -93,7 +92,7 @@ def draw_dashboard(selection):
     fig.add_hline(y=0, line_color="black", opacity=0.5)
     fig.update_layout(
         hovermode="x unified", height=650, template='plotly_white',
-        xaxis=dict(title="날짜 (KST)", tickformat="%m%d\n%H:%M", dtick=86400000.0),
+        xaxis=dict(title="날짜", tickformat="%m%d\n%H:%M", dtick=86400000.0),
         yaxis=dict(title="수익률 (%)"),
         legend=dict(orientation="h", y=1.02, x=1)
     )
@@ -103,4 +102,4 @@ def draw_dashboard(selection):
 # 실행
 draw_dashboard(mode)
 
-st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | {mode} 기준 적용됨 | 반도체 지수(SOXX) 추가 완료")
+st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | {mode} 기준 적용됨")
