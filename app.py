@@ -74,7 +74,7 @@ def draw_chart():
             line=dict(width=2, color=colors[i])
         ))
 
-    # 4. 월요일 오전 09:00 수직 실선
+    # 4. 월요일 오전 09:00 수직 실선 및 라벨
     if all_data_indices:
         start_date = min([idx.min() for idx in all_data_indices])
         end_date = max([idx.max() for idx in all_data_indices])
@@ -86,9 +86,37 @@ def draw_chart():
                     line_width=1, 
                     line_dash="solid", 
                     line_color="rgba(128, 128, 128, 0.4)",
-                    annotation_text=curr.strftime('%m월-%d일'), # 선 위에 날짜 표시
+                    annotation_text=curr.strftime('%m%d'), # 선 위에 '0305' 형식 표시
                     annotation_position="top left"
                 )
             curr += timedelta(days=1)
 
-    fig.add_vline
+    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dash", line_color="green", line_width=2)
+    fig.add_hline(y=0, line_color="black", line_width=1, opacity=0.3)
+    
+    # 5. 레이아웃 및 날짜 형식 설정
+    fig.update_layout(
+        hovermode="x unified",
+        height=650,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(
+            title="날짜",
+            showgrid=True,
+            # X축 날짜 형식을 '0305' 스타일로 변경
+            tickformat="%m%d\n%H:%M",
+            # dtick을 하루(86400000ms) 단위로 설정하여 매일 날짜가 보이게 함
+            dtick=86400000.0, 
+            tickangle=0
+        ),
+        yaxis=dict(title="수익률 (%)", showgrid=True),
+        template='plotly_white'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 하단 캡션 날짜 형식 변경
+    formatted_ref = ref_time.strftime('%m%d %H:%M')
+    formatted_now = datetime.now().strftime('%m%d %H:%M:%S')
+    st.caption(f"기준: {formatted_ref} | 갱신: {formatted_now}")
+
+draw_chart()
