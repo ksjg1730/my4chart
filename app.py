@@ -7,24 +7,28 @@ from datetime import datetime, timedelta
 # 1. 페이지 설정
 st.set_page_config(page_title="글로벌 자산 수익률 비교", layout="wide")
 
-st.title("📊 글로벌 지표 vs 국내 ETF 수익률 비교")
+st.title("📊 글로벌 원유 vs 지표 수익률 비교")
 
-# 2. 종목 설정 (3번째를 DXY 지수로 변경)
+# 2. 종목 설정 (1번을 WTI 원유 선물로 변경)
 tickers = {
-    'DX=F': '달러 인덱스 선물',        # 5배 가중치
-    'SI=F': '글로벌 은 선물 (COMEX)',  # 2배 가중치
-    'DX-Y.NYB': 'DXY 달러지수 현물',   # 3번째 항목, 5배 가중치 적용
+    'CL=F': 'WTI 원유 선물 (NYMEX)',   # 1번 항목 (석유)
+    'SI=F': '글로벌 은 선물 (COMEX)',   # 2배 가중치
+    'DX-Y.NYB': 'DXY 달러지수 현물',    # 5배 가중치
     '233740.KS': 'KODEX 코스닥150레버리지'
 }
 
 def get_reference_time():
-    """최근 금요일 12:00 (KST) 계산"""
+    """가장 최근 월요일 09:00 (KST) 기준 시간을 계산"""
     today = datetime.now()
-    days_since_friday = (today.weekday() - 4) % 7
-    last_friday = today - timedelta(days=days_since_friday)
-    if today.weekday() < 4 or (today.weekday() == 4 and today.hour < 12):
-        last_friday -= timedelta(days=7)
-    return pd.Timestamp(last_friday.replace(hour=12, minute=0, second=0)).tz_localize('Asia/Seoul')
+    # 요일 계산 (0:월, 1:화...)
+    days_since_monday = today.weekday()
+    last_monday = today - timedelta(days=days_since_monday)
+    
+    # 만약 오늘이 월요일인데 아직 9시 전이면 지난주 월요일로
+    if today.weekday() == 0 and today.hour < 9:
+        last_monday -= timedelta(days=7)
+        
+    return pd.Timestamp(last_monday.replace(hour=9, minute=0, second=0)).tz_localize('Asia/Seoul')
 
 ref_time = get_reference_time()
 
@@ -33,11 +37,13 @@ ref_time = get_reference_time()
 def draw_chart():
     fig = go.Figure()
     cols = st.columns(len(tickers))
-    colors = ['#1F77B4', '#FFD700', '#FF4B4B', '#00CC96'] # 3번째 강조를 위해 빨간색 계열 사용
+    # 원유(검정/진회색), 은(금색), 달러(빨강), 코스닥(녹색)
+    colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96'] 
 
     all_data_indices = []
 
     for i, (symbol, name) in enumerate(tickers.items()):
+        # 데이터 수집 (30분봉)
         df = yf.download(symbol, period='1mo', interval='30m', progress=False)
         if df.empty: continue
         
@@ -47,21 +53,19 @@ def draw_chart():
         df.index = df.index.tz_convert('Asia/Seoul')
         all_data_indices.append(df.index)
         
+        # [수익률 기준점 변경: 월요일 09:00]
         base_df = df[df.index <= ref_time]
         base_price = float(base_df['Close'].iloc[-1]) if not base_df.empty else float(df['Close'].iloc[0])
         
         raw_return = ((df['Close'] - base_price) / base_price * 100)
         
-        # [가중치 적용 로직 수정]
-        if symbol == 'DX=F':
+        # 가중치 설정
+        if symbol == 'DX-Y.NYB':
             df['Return'] = raw_return * 5
             display_name = f"{name} (5x)"
         elif symbol == 'SI=F':
             df['Return'] = raw_return * 2
             display_name = f"{name} (2x)"
-        elif symbol == 'DX-Y.NYB':  # 3번째 DXY 지수 5배 가중치
-            df['Return'] = raw_return * 5
-            display_name = f"{name} (5x)"
         else:
             df['Return'] = raw_return
             display_name = name
@@ -77,7 +81,7 @@ def draw_chart():
             line=dict(width=2, color=colors[i])
         ))
 
-    # 4. 월요일 오전 09:00 수직 실선 및 라벨 (0305 형식)
+    # 4. 월요일 오전 09:00 수직 실선
     if all_data_indices:
         start_date = min([idx.min() for idx in all_data_indices])
         end_date = max([idx.max() for idx in all_data_indices])
@@ -86,18 +90,18 @@ def draw_chart():
             if curr.weekday() == 0:
                 fig.add_vline(
                     x=curr.timestamp() * 1000, 
-                    line_width=1, 
+                    line_width=1.5, 
                     line_dash="solid", 
-                    line_color="rgba(128, 128, 128, 0.4)",
+                    line_color="rgba(128, 128, 128, 0.6)",
                     annotation_text=curr.strftime('%m%d'),
                     annotation_position="top left"
                 )
             curr += timedelta(days=1)
 
-    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dash", line_color="green", line_width=2)
+    # 5. 기준점(월요일 9시) 강조선
+    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dash", line_color="blue", line_width=2, annotation_text="이번주 시작")
     fig.add_hline(y=0, line_color="black", line_width=1, opacity=0.3)
     
-    # 5. 레이아웃 및 날짜 형식 설정
     fig.update_layout(
         hovermode="x unified",
         height=650,
@@ -106,7 +110,7 @@ def draw_chart():
             title="날짜",
             showgrid=True,
             tickformat="%m%d\n%H:%M",
-            dtick=86400000.0, # 매일 날짜 표시
+            dtick=86400000.0, 
             tickangle=0
         ),
         yaxis=dict(title="수익률 (%)", showgrid=True),
@@ -115,8 +119,6 @@ def draw_chart():
 
     st.plotly_chart(fig, use_container_width=True)
     
-    formatted_ref = ref_time.strftime('%m%d %H:%M')
-    formatted_now = datetime.now().strftime('%m%d %H:%M:%S')
-    st.caption(f"기준: {formatted_ref} | 갱신: {formatted_now}")
+    st.caption(f"이번 주 기준(월 09:00): {ref_time.strftime('%m%d %H:%M')} | 갱신: {datetime.now().strftime('%m%d %H:%M:%S')}")
 
 draw_chart()
