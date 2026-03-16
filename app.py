@@ -18,7 +18,7 @@ tickers = {
     'CL=F': 'WTI 원유 선물',
     'SI=F': '글로벌 은 선물 (2x)',
     'DX-Y.NYB': 'DXY 달러지수 (5x)',
-      'SOXX': '필라델피아 반도체(SOXX)' # 4번 항목 교체
+    '233740.KS': 'KODEX 코스닥150레버리지'
 }
 
 @st.cache_data(ttl=600)
