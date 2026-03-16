@@ -5,15 +5,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="수익률 분석 대시보드", layout="wide")
+st.set_page_config(page_title="주간 수익률 대시보드", layout="wide")
 
-# 2. 사이드바 메뉴 (화면 전환)
-st.sidebar.title("📌 메뉴 선택")
-mode = st.sidebar.radio("보고 싶은 기준을 선택하세요:", ["주간 리셋 (월 09:00)", "월간 리셋 (월초 09:00)"])
+st.title("📊 자산별 주간 수익률 분석 (월요일 09:00 리셋)")
 
-st.title(f"📊 자산별 {mode} 분석")
-
-# 3. 종목 설정
+# 2. 종목 설정
 tickers = {
     'CL=F': 'WTI 원유 선물',
     'SI=F': '글로벌 은 선물 (2x)',
@@ -23,16 +19,16 @@ tickers = {
 
 @st.cache_data(ttl=600)
 def load_data(symbol):
-    # 월간 데이터를 위해 2개월치 로드
-    df = yf.download(symbol, period='2mo', interval='30m', progress=False)
+    # 주간 데이터 확인을 위해 1개월치 로드
+    df = yf.download(symbol, period='1mo', interval='30m', progress=False)
     if not df.empty:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.index = df.index.tz_convert('Asia/Seoul')
     return df
 
-# 4. 차트 생성 함수
-def draw_dashboard(selection):
+# 3. 차트 생성 함수
+def draw_dashboard():
     fig = go.Figure()
     cols = st.columns(len(tickers))
     colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
@@ -43,19 +39,11 @@ def draw_dashboard(selection):
         if df_raw.empty: continue
         df = df_raw.copy()
 
-        # --- 기준점 설정 로직 ---
-        if "주간" in selection:
-            # 매주 월요일 09:00
-            bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
-            label_format = '%m%d'
-        else:
-            # 매월 초 첫 데이터 (날짜가 바뀌는 시점)
-            df['m_val'] = df.index.month
-            bases = df[df['m_val'] != df['m_val'].shift(1)]
-            label_format = '%m월'
-
+        # 월요일 09:00 기준가 찾기
+        monday_bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
+        
         def get_ref_price(ts):
-            past = bases[bases.index <= ts]
+            past = monday_bases[monday_bases.index <= ts]
             return float(past['Close'].iloc[-1]) if not past.empty else float(df['Close'].iloc[0])
 
         # 수익률 계산
@@ -80,26 +68,28 @@ def draw_dashboard(selection):
         ))
         all_indices.append(df.index)
 
-    # 리셋 수직선 표시
+    # 월요일 리셋 실선 표시
     if all_indices:
-        start_ts = min([idx.min() for idx in all_indices])
-        for b_ts in bases.index:
-            if b_ts >= start_ts:
-                fig.add_vline(x=b_ts.timestamp()*1000, line_dash="solid", 
-                              line_color="rgba(128, 128, 128, 0.3)", 
-                              annotation_text=b_ts.strftime(label_format))
+        start_date = min([idx.min() for idx in all_indices])
+        end_date = max([idx.max() for idx in all_indices])
+        curr = start_date.replace(hour=9, minute=0, second=0)
+        while curr <= end_date:
+            if curr.weekday() == 0:
+                fig.add_vline(x=curr.timestamp()*1000, line_dash="solid", 
+                              line_color="rgba(200,0,0,0.2)", annotation_text=curr.strftime('%m%d'))
+            curr += timedelta(days=1)
 
     fig.add_hline(y=0, line_color="black", opacity=0.5)
     fig.update_layout(
-        hovermode="x unified", height=650, template='plotly_white',
+        hovermode="x unified", height=600, template='plotly_white',
         xaxis=dict(title="날짜", tickformat="%m%d\n%H:%M", dtick=86400000.0),
-        yaxis=dict(title="수익률 (%)"),
+        yaxis=dict(title="주간 수익률 (%)"),
         legend=dict(orientation="h", y=1.02, x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True, key=f"chart_{selection}")
+    st.plotly_chart(fig, use_container_width=True)
 
 # 실행
-draw_dashboard(mode)
+draw_dashboard()
 
-st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | {mode} 기준 적용됨")
+st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 기준: 매주 월요일 09:00 리셋 | 데이터: yfinance 30분봉")
