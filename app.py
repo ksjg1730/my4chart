@@ -17,9 +17,10 @@ tickers = {
     '233740.KS': 'KODEX 코스닥150레버리지'
 }
 
-# 데이터 수집 함수 (캐싱 활용하여 속도 향상)
+# 데이터 수집 함수 (캐싱)
 @st.cache_data(ttl=600)
 def load_data(symbol):
+    # 월간 데이터를 위해 2개월치 로드
     df = yf.download(symbol, period='2mo', interval='30m', progress=False)
     if not df.empty:
         if isinstance(df.columns, pd.MultiIndex):
@@ -27,38 +28,35 @@ def load_data(symbol):
         df.index = df.index.tz_convert('Asia/Seoul')
     return df
 
-# 3. 메인 화면 구성
-tab1, tab2 = st.tabs(["📅 주간 기준 (월요일 09:00)", "📆 월간 기준 (월초 개장)"])
-
+# 차트 생성 함수
 def create_chart(mode='weekly'):
     fig = go.Figure()
+    # 고유 ID 생성을 위한 prefix
+    prefix = "week" if mode == 'weekly' else "month"
+    
+    # 지표를 표시할 컬럼 생성
     cols = st.columns(len(tickers))
     colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
     all_indices = []
 
     for i, (symbol, name) in enumerate(tickers.items()):
-        df = load_data(symbol)
+        df = load_data(symbol).copy() # 데이터 복사본 사용
         if df.empty: continue
         
         # --- 기준가 계산 로직 ---
         if mode == 'weekly':
-            # 매주 월요일 09:00 가격 찾기
+            # 매주 월요일 09:00 기준
             bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
-            reset_label = "Mon 09:00"
         else:
-            # 매월 1일(또는 월초 첫 거래일) 09:00 가격 찾기
-            # 일(day)이 이전 행보다 작아지는 지점이 월이 바뀌는 지점
-            df['day'] = df.index.day
-            bases = df[df['day'] != df['day'].shift(1)].resample('MS').first() # 월초 데이터 샘플링
-            # 실제 데이터 내 월초 첫 9시 가격 추출
-            bases = df[df.index.isin(df.index.to_series().resample('MS').first())] 
-            reset_label = "Month Start"
+            # 매월 초 개장 시점 기준
+            df['month_val'] = df.index.month
+            # 월이 바뀌는 첫 번째 행들 추출
+            bases = df[df['month_val'] != df['month_val'].shift(1)]
 
         def get_base_price(ts):
             past_bases = bases[bases.index <= ts]
             return float(past_bases['Close'].iloc[-1]) if not past_bases.empty else float(df['Close'].iloc[0])
 
-        # 기준가 적용 및 수익률 계산
         df['Base_Price'] = [get_base_price(ts) for ts in df.index]
         raw_return = ((df['Close'] - df['Base_Price']) / df['Base_Price'] * 100)
         
@@ -68,16 +66,19 @@ def create_chart(mode='weekly'):
         else: df['Return'] = raw_return
             
         current_return = float(df['Return'].iloc[-1])
-        cols[i].metric(label=name, value=f"{current_return:+.2f}%")
+        
+        # 상단 지표 (metric에 고유 라벨 부여)
+        display_name = f"{name} (5x)" if symbol == 'DX-Y.NYB' else (f"{name} (2x)" if symbol == 'SI=F' else name)
+        cols[i].metric(label=display_name, value=f"{current_return:+.2f}%")
 
         fig.add_trace(go.Scatter(
             x=df.index, y=df['Return'],
-            mode='lines', name=name,
+            mode='lines', name=display_name,
             line=dict(width=2, color=colors[i])
         ))
         all_indices.append(df.index)
 
-    # 수직선 추가 (리셋 지점)
+    # 리셋 수직선 추가
     if all_indices:
         start_date, end_date = all_indices[0].min(), all_indices[0].max()
         if mode == 'weekly':
@@ -88,7 +89,6 @@ def create_chart(mode='weekly'):
                                   annotation_text=curr.strftime('%m%d'))
                 curr += timedelta(days=1)
         else:
-            # 월초 지점 실선 표시
             for b_ts in bases.index:
                 if b_ts >= start_date:
                     fig.add_vline(x=b_ts.timestamp()*1000, line_dash="solid", line_color="rgba(0,0,200,0.2)",
@@ -98,15 +98,19 @@ def create_chart(mode='weekly'):
     fig.update_layout(hovermode="x unified", height=600, template='plotly_white',
                       xaxis=dict(tickformat="%m%d\n%H:%M", dtick=86400000.0),
                       legend=dict(orientation="h", y=1.02, x=1))
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # [핵심] 차트에 고유한 key를 부여하여 중복 ID 에러 방지
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_{mode}")
 
-# 탭별 출력
+# 3. 탭 구성
+tab1, tab2 = st.tabs(["📅 주간 기준 (월요일 09:00)", "📆 월간 기준 (월초 개장)"])
+
 with tab1:
-    st.subheader("이번 주 성적 (매주 월요일 09:00 리셋)")
+    st.subheader("이번 주 성적")
     create_chart(mode='weekly')
 
 with tab2:
-    st.subheader("이번 달 성적 (매월 초 개장 시점 리셋)")
+    st.subheader("이번 달 성적")
     create_chart(mode='monthly')
 
 st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 데이터: yfinance 30분봉")
