@@ -36,8 +36,9 @@ def draw_integrated_dashboard():
     all_indices = []
 
     for i, (symbol, name) in enumerate(tickers.items()):
-        df = load_data(symbol).copy()
-        if df.empty: continue
+        df_raw = load_data(symbol)
+        if df_raw.empty: continue
+        df = df_raw.copy()
 
         # --- A. 주간 기준가 계산 (이번 주 월요일 09:00) ---
         monday_bases = df[(df.index.weekday == 0) & (df.index.hour == 9) & (df.index.minute == 0)]
@@ -57,7 +58,7 @@ def draw_integrated_dashboard():
         week_raw = ((df['Close'] - df['Weekly_Base']) / df['Weekly_Base'] * 100)
         month_raw = ((df['Close'] - df['Monthly_Base']) / df['Monthly_Base'] * 100)
 
-        # 가중치 및 최종 수익률 설정
+        # 가중치 설정
         weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
         df['Weekly_Ret'] = week_raw * weight
         df['Monthly_Ret'] = month_raw * weight
@@ -65,23 +66,24 @@ def draw_integrated_dashboard():
         curr_week = float(df['Weekly_Ret'].iloc[-1])
         curr_month = float(df['Monthly_Ret'].iloc[-1])
 
-        # --- 상단 지표 표시 (주간/월간 나란히) ---
+        # --- 상단 지표 표시 ---
         with cols[i]:
             st.markdown(f"**{name}**")
-            st.metric(label="이번주(2x/5x)", value=f"{curr_week:+.2f}%")
-            st.metric(label="이번달(2x/5x)", value=f"{curr_month:+.2f}%")
+            st.metric(label="이번주(가중)", value=f"{curr_week:+.2f}%")
+            st.metric(label="이번달(가중)", value=f"{curr_month:+.2f}%")
 
-        # --- 차트에는 주간 수익률 선만 추가 ---
+        # --- 차트 추가 ---
         fig.add_trace(go.Scatter(
             x=df.index, y=df['Weekly_Ret'],
-            mode='lines', name=f"{name}",
+            mode='lines', name=name,
             line=dict(width=2, color=colors[i])
         ))
         all_indices.append(df.index)
 
     # 월요일 리셋 실선 표시
     if all_indices:
-        start_date, end_date = all_indices[0].min(), all_indices[0].max()
+        start_date = min([idx.min() for idx in all_indices])
+        end_date = max([idx.max() for idx in all_indices])
         curr = start_date.replace(hour=9, minute=0, second=0)
         while curr <= end_date:
             if curr.weekday() == 0:
@@ -100,4 +102,6 @@ def draw_integrated_dashboard():
     st.plotly_chart(fig, use_container_width=True, key="integrated_chart")
 
 draw_integrated_dashboard()
-st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 모든 수익률은 설정된 가중치(2x, 5x)가 적용된 수치입니다.")%d %H:%M:%S')} | 데이터: yfinance 30분봉")
+
+# 마지막 줄 수정됨
+st.caption(f"최근 갱신: {datetime.now().strftime('%m%d %H:%M:%S')} | 데이터: yfinance 30분봉 | 가중치(2x, 5x) 반영됨")
