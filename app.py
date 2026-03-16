@@ -4,14 +4,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# 페이지 설정
+# 1. 페이지 설정
 st.set_page_config(page_title="글로벌 자산 수익률 비교", layout="wide")
 
 st.title("📊 글로벌 은 선물 vs 국내 ETF 수익률 비교")
 
-# 1. 종목 설정 (반도체 레버리지 -> 글로벌 은 선물로 변경)
+# 2. 종목 설정
 tickers = {
-    'SI=F': '글로벌 은 선물 (COMEX)',  # 글로벌 데이터로 변경
+    'SI=F': '글로벌 은 선물 (COMEX)',
     '144600.KS': 'KODEX 은선물(H)',
     '261250.KS': 'KODEX 달러레버리지',
     '233740.KS': 'KODEX 코스닥150레버리지'
@@ -28,44 +28,40 @@ def get_reference_time():
 
 ref_time = get_reference_time()
 
-# 3. 데이터 로드 및 시각화
+# 3. 차트 그리기 (Fragment를 사용하여 60초마다 부분 갱신)
 @st.fragment(run_every=60)
 def draw_chart():
     fig = go.Figure()
     cols = st.columns(4)
-    colors = ['#FFD700', '#EF553B', '#00CC96', '#636EFA'] # 은색/금색 느낌을 위해 첫번째 색상 변경
+    colors = ['#FFD700', '#EF553B', '#00CC96', '#636EFA']
 
- # ... (앞부분 생략)
+    # 모든 종목의 데이터를 담을 리스트 (시간 범위 파악용)
+    all_data_indices = []
 
     for i, (symbol, name) in enumerate(tickers.items()):
-        # 최근 1개월 데이터 (30분봉)
+        # 데이터 수집
         df = yf.download(symbol, period='1mo', interval='30m', progress=False)
         if df.empty: continue
         
-        # 한국 시간 변환
-        df.index = df.index.tz_convert('Asia/Seoul')
-        
-        # [수정 포인트 1] 데이터프레임 구조 단순화 (멀티인덱스 제거)
+        # 멀티인덱스 컬럼 문제 해결 (AttributeError 방지 핵심)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-
-        # 수익률 계산
-        base_df = df[df.index <= ref_time]
-        if not base_df.empty:
-            base_price = base_df['Close'].iloc[-1]
-        else:
-            base_price = df['Close'].iloc[0]
-            
-        # 수익률 계산 (float 타입 보장)
-        df['Return'] = ((df['Close'] - base_price) / base_price * 100)
         
-        # [수정 포인트 2] 마지막 수익률 값 안전하게 가져오기
+        # 시간대 변환
+        df.index = df.index.tz_convert('Asia/Seoul')
+        all_data_indices.append(df.index)
+        
+        # 수익률 계산 (금요일 12:00 기준)
+        base_df = df[df.index <= ref_time]
+        base_price = float(base_df['Close'].iloc[-1]) if not base_df.empty else float(df['Close'].iloc[0])
+        
+        df['Return'] = ((df['Close'] - base_price) / base_price * 100)
         current_return = float(df['Return'].iloc[-1])
 
         # 상단 지표 표시
         cols[i].metric(label=name, value=f"{current_return:+.2f}%")
 
-        # 메인 그래프 추가
+        # 라인 추가
         fig.add_trace(go.Scatter(
             x=df.index, 
             y=df['Return'],
@@ -73,20 +69,40 @@ def draw_chart():
             name=name,
             line=dict(width=2, color=colors[i])
         ))
-        
-# ... (뒷부분 생략)
 
+    # 4. 월요일 오전 09:00 수직선 추가
+    if all_data_indices:
+        full_range = all_data_indices[0] # 첫 번째 종목의 인덱스 기준
+        start_date = full_range.min()
+        end_date = full_range.max()
+        
+        curr = start_date.replace(hour=9, minute=0, second=0)
+        while curr <= end_date:
+            if curr.weekday() == 0: # 0: 월요일
+                fig.add_vline(
+                    x=curr.timestamp() * 1000, 
+                    line_width=1, 
+                    line_dash="solid", 
+                    line_color="rgba(128, 128, 128, 0.4)", # 연한 회색 실선
+                    annotation_text="Mon 09:00",
+                    annotation_position="top left"
+                )
+            curr += timedelta(days=1)
+
+    # 5. 기준선(금요일 12시) 및 레이아웃 설정
+    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dash", line_color="green", line_width=2)
+    fig.add_hline(y=0, line_color="black", line_width=1, opacity=0.3)
+    
     fig.update_layout(
         hovermode="x unified",
         height=600,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(title="시간 (KST)"),
-        yaxis=dict(title="수익률 (%)", zeroline=True, zerolinewidth=2, zerolinecolor='Black'),
+        xaxis=dict(title="날짜 (KST)"),
+        yaxis=dict(title="수익률 (%)"),
         template='plotly_white'
     )
-    
-    fig.add_vline(x=ref_time.timestamp() * 1000, line_dash="dot", line_color="green")
+
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"기준 시간: {ref_time.strftime('%Y-%m-%d %H:%M')} | 마지막 갱신: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (60초 간격 자동 갱신)")
 
 draw_chart()
