@@ -22,73 +22,80 @@ colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
 
 @st.cache_data(ttl=600)
 def load_all_data():
-    """15분봉 데이터를 안전하게 호출"""
     ticker_symbols = list(tickers.keys())
-    
-    # 15분봉(15m), 기간 1개월(1mo)
+    # 15분봉, 1개월 데이터 호출
     df = yf.download(
         tickers=ticker_symbols,
         period='1mo',
         interval='15m',
-        progress=False,
-        group_by='ticker' # 종목별로 데이터를 묶어서 가져옴 (가장 안전한 방법)
+        progress=False
     )
-    
-    if df.empty:
-        return None
     return df
-
-def process_data(df, symbol, weight):
-    """특정 종목의 Close 가격 추출 및 수익률 계산"""
-    try:
-        # group_by='ticker'로 가져온 경우 처리
-        if symbol in df.columns.levels[0]:
-            series = df[symbol]['Close'].dropna()
-        else:
-            return pd.Series()
-    except:
-        # 단일 종목이거나 구조가 다를 경우 대비
-        try:
-            series = df['Close'][symbol].dropna()
-        except:
-            return pd.Series()
-
-    if series.empty:
-        return pd.Series()
-
-    # 한국 시간대 변환
-    series.index = series.index.tz_convert('Asia/Seoul')
-
-    # 주차별 첫 데이터(기준가) 계산
-    weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
-    
-    # 수익률 계산 (가중치 적용)
-    returns = ((series - weekly_first) / weekly_first * 100) * weight
-    return returns
 
 def draw_dashboard():
     df = load_all_data()
     
-    if df is None:
-        st.error("❌ 데이터를 불러올 수 없습니다. 인터넷 연결이나 야후 파이낸스 상태를 확인하세요.")
+    if df is None or df.empty:
+        st.error("❌ 데이터를 불러올 수 없습니다. 야후 파이낸스 연결을 확인하세요.")
         return
 
     fig = go.Figure()
     cols = st.columns(len(tickers))
 
+    # 데이터 구조 대응 (MultiIndex 여부 확인)
+    is_multi = isinstance(df.columns, pd.MultiIndex)
+
     for i, (symbol, name) in enumerate(tickers.items()):
-        weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
-        returns = process_data(df, symbol, weight)
-        
-        if returns.empty:
-            cols[i].warning(f"{name} 데이터 없음")
+        try:
+            # 1. 종가(Close) 데이터 추출
+            if is_multi:
+                series = df['Close'][symbol].dropna()
+            else:
+                series = df['Close'].dropna() if len(tickers) == 1 else df[symbol].dropna()
+            
+            if series.empty:
+                continue
+
+            # 2. 시간대 변환
+            series.index = series.index.tz_convert('Asia/Seoul')
+
+            # 3. 가중치 및 수익률 계산
+            weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
+            weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
+            returns = ((series - weekly_first) / weekly_first * 100) * weight
+
+            # 4. 상단 지표 (Metric)
+            curr_price = series.iloc[-1]
+            curr_ret = returns.iloc[-1]
+            display_name = f"{name} ({weight}x)" if weight > 1 else name
+            
+            cols[i].metric(label=display_name, value=f"{curr_price:,.2f}", delta=f"{curr_ret:+.2f}%")
+
+            # 5. 차트 추가
+            fig.add_trace(go.Scatter(
+                x=returns.index, y=returns,
+                mode='lines', name=display_name,
+                line=dict(width=2, color=colors[i]),
+                hovertemplate='%{x|%m/%d %H:%M}<br>수익률: %{y:.2f}%<extra></extra>'
+            ))
+            
+        except Exception as e:
+            cols[i].error(f"{name} 계산 오류")
             continue
 
-        # 현재 수치들
-        curr_ret = returns.iloc[-1]
-        try:
-            # 원 데이터에서 현재가 추출
-            if symbol in df.columns.levels[0]:
-                curr_price = df[symbol]['Close'].dropna().iloc[-1]
-            else:
-                curr_price = df['Close'][symbol
+    fig.update_layout(
+        hovermode="x unified",
+        height=600,
+        template='plotly_white',
+        xaxis=dict(title="", tickformat="%m/%d\n%H:%M"),
+        yaxis=dict(title="수익률 (%)", ticksuffix="%"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+if __name__ == "__main__":
+    draw_dashboard()
+    now_str = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
+    st.caption(f"최근 갱신: {now_str} (KST) | 데이터: 15분봉 | 기준: 매주 첫 거래 데이터")
