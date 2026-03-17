@@ -4,7 +4,23 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import pytz
+import streamlit as st
 
+# 1. 모바일 확대 방지를 위한 메타 태그 삽입
+st.markdown(
+    """
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        /* 추가로 모바일에서 텍스트 입력 시 폰트 크기 때문에 확대되는 것 방지 (iOS 대응) */
+        input, select, textarea {
+            font-size: 16px !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# 기존 코드 (st.set_page_config 등)가 이 아래에 오면 됩니다.
 # 1. 페이지 설정
 st.set_page_config(page_title="주간 수익률 대시보드", layout="wide")
 
