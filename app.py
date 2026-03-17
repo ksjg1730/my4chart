@@ -5,7 +5,17 @@ import plotly.graph_objects as go
 from datetime import datetime
 import pytz
 import streamlit as st
+import streamlit as st
 
+# 사이드바에서 버전 선택
+version = st.sidebar.selectbox("버전 선택", ["원본 버전", "2배 가중치 버전"])
+
+if version == "원본 버전":
+    # 기존 코드 실행
+    st.write("기본 모드입니다.")
+else:
+    # 새로운 로직 실행
+    st.write("2배 가중치 모드입니다.")
 # 1. 모바일 확대 방지를 위한 메타 태그 삽입
 st.markdown(
     """
