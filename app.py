@@ -9,7 +9,7 @@ import pytz
 st.set_page_config(page_title="주간 수익률 대시보드 (15분봉)", layout="wide")
 
 st.title("📊 자산별 주간 수익률 분석 (15분봉)")
-st.markdown("##### 🕒 매주 월요일 첫 거래 데이터 기준 리셋 (가중치 반영)")
+st.markdown("##### 🕒 월요일 첫 거래 기준 리셋 | 🏆 1위 종목 강조 모드")
 
 # 2. 종목 및 설정
 tickers = {
@@ -18,84 +18,81 @@ tickers = {
     'DX-Y.NYB': 'DXY 달러지수',
     'SOXX': '필라델피아 반도체(SOXX)'
 }
-colors = ['#333333', '#FFD700', '#FF4B4B', '#00CC96']
+# 기본 색상 (1위가 아닐 때 사용)
+default_colors = ['#7F8C8D', '#95A5A6', '#BDC3C7', '#D5D8DC'] 
 
 @st.cache_data(ttl=600)
 def load_all_data():
     ticker_symbols = list(tickers.keys())
-    # 15분봉, 1개월 데이터 호출
-    df = yf.download(
-        tickers=ticker_symbols,
-        period='1mo',
-        interval='15m',
-        progress=False
-    )
+    df = yf.download(tickers=ticker_symbols, period='1mo', interval='15m', progress=False)
     return df
 
 def draw_dashboard():
     df = load_all_data()
     
     if df is None or df.empty:
-        st.error("❌ 데이터를 불러올 수 없습니다. 야후 파이낸스 연결을 확인하세요.")
+        st.error("❌ 데이터를 불러올 수 없습니다.")
         return
 
-    fig = go.Figure()
-    cols = st.columns(len(tickers))
-
-    # 데이터 구조 대응 (MultiIndex 여부 확인)
+    # 데이터 전처리 및 수익률 계산 결과를 담을 리스트
+    results = []
     is_multi = isinstance(df.columns, pd.MultiIndex)
+    all_reset_times = set()
 
-    for i, (symbol, name) in enumerate(tickers.items()):
+    for symbol, name in tickers.items():
         try:
-            # 1. 종가(Close) 데이터 추출
             if is_multi:
                 series = df['Close'][symbol].dropna()
             else:
                 series = df['Close'].dropna() if len(tickers) == 1 else df[symbol].dropna()
             
-            if series.empty:
-                continue
-
-            # 2. 시간대 변환
+            if series.empty: continue
             series.index = series.index.tz_convert('Asia/Seoul')
 
-            # 3. 가중치 및 수익률 계산
+            # 가중치 설정
             weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
-            weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
+            
+            # 주차별 그룹화 및 첫 봉(리셋 지점) 찾기
+            groups = series.groupby([series.index.year, series.index.isocalendar().week])
+            weekly_first = groups.transform('first')
+            reset_times = series.groupby([series.index.year, series.index.isocalendar().week]).idxmin()
+            for t in reset_times: all_reset_times.add(t)
+
             returns = ((series - weekly_first) / weekly_first * 100) * weight
-
-            # 4. 상단 지표 (Metric)
-            curr_price = series.iloc[-1]
-            curr_ret = returns.iloc[-1]
-            display_name = f"{name} ({weight}x)" if weight > 1 else name
             
-            cols[i].metric(label=display_name, value=f"{curr_price:,.2f}", delta=f"{curr_ret:+.2f}%")
+            results.append({
+                'symbol': symbol,
+                'name': name,
+                'returns': returns,
+                'last_return': returns.iloc[-1],
+                'last_price': series.iloc[-1],
+                'weight': weight
+            })
+        except: continue
 
-            # 5. 차트 추가
-            fig.add_trace(go.Scatter(
-                x=returns.index, y=returns,
-                mode='lines', name=display_name,
-                line=dict(width=2, color=colors[i]),
-                hovertemplate='%{x|%m/%d %H:%M}<br>수익률: %{y:.2f}%<extra></extra>'
-            ))
-            
-        except Exception as e:
-            cols[i].error(f"{name} 계산 오류")
-            continue
+    if not results: return
 
-    fig.update_layout(
-        hovermode="x unified",
-        height=600,
-        template='plotly_white',
-        xaxis=dict(title="", tickformat="%m/%d\n%H:%M"),
-        yaxis=dict(title="수익률 (%)", ticksuffix="%"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=0, r=0, t=50, b=0)
-    )
+    # 3. 수익률 1위 종목 찾기
+    results.sort(key=lambda x: x['last_return'], reverse=True)
+    best_stock = results[0] # 현재 수익률 가장 높은 종목
 
-    st.plotly_chart(fig, use_container_width=True)
+    fig = go.Figure()
+    cols = st.columns(len(tickers))
 
-if __name__ == "__main__":
-    draw_dashboard()
-    now_str = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
-    st.caption(f"최근 갱신: {now_str} (KST) | 데이터: 15분봉 | 기준: 매주 첫 거래 데이터")
+    for i, res in enumerate(results):
+        is_best = (res['symbol'] == best_stock['symbol'])
+        line_color = 'red' if is_best else '#D3D3D3' # 1위는 빨강, 나머지는 연한 회색
+        line_width = 4 if is_best else 1.5
+        
+        display_name = f"{res['name']} ({res['weight']}x)" if res['weight'] > 1 else res['name']
+        
+        # 상단 Metric 표시 (정렬된 순서대로 표시됨)
+        cols[i].metric(label=display_name, value=f"{res['last_price']:,.2f}", delta=f"{res['last_return']:+.2f}%")
+
+        # 차트 선 추가
+        fig.add_trace(go.Scatter(
+            x=res['returns'].index, y=res['returns'],
+            mode='lines', 
+            name=f"🏆 {display_name}" if is_best else display_name,
+            line=dict(width=line_width, color=line_color),
+            hovertemplate='<b>%{fullData.name}</b>
