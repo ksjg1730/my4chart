@@ -9,7 +9,7 @@ import pytz
 st.set_page_config(page_title="주간 수익률 대시보드 (15분봉)", layout="wide")
 
 st.title("📊 자산별 주간 수익률 분석 (15분봉)")
-st.markdown("##### 🕒 월요일 첫 거래 기준 리셋 | 🏆 1위 종목 RED 강조")
+st.markdown("##### 🕒 월요일 리셋 (블루 라인) | 🏆 실시간 수익률 1위 자동 강조 (레드 라인)")
 
 # 2. 종목 설정
 tickers = {
@@ -19,7 +19,7 @@ tickers = {
     'SOXX': '필라델피아 반도체(SOXX)'
 }
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300) # 5분마다 데이터 갱신
 def load_all_data():
     ticker_symbols = list(tickers.keys())
     # 15분봉, 1개월 데이터 호출
@@ -55,7 +55,7 @@ def draw_dashboard():
             groups = series.groupby([series.index.year, series.index.isocalendar().week])
             weekly_first = groups.transform('first')
             
-            # 리셋 시간 추출 (수직선용)
+            # 리셋 시간 추출 (수직선용 - 블루)
             reset_times = series.groupby([series.index.year, series.index.isocalendar().week]).idxmin()
             for t in reset_times: all_reset_times.add(t)
 
@@ -71,7 +71,7 @@ def draw_dashboard():
         st.warning("분석 가능한 데이터가 없습니다.")
         return
 
-    # 수익률 순 정렬 (1위 찾기 및 상단 지표 순서용)
+    # 실시간 수익률 기준 내림차순 정렬 (1위 종목이 바뀔 때마다 자동으로 바뀜)
     results.sort(key=lambda x: x['last_return'], reverse=True)
     best_symbol = results[0]['symbol']
 
@@ -79,17 +79,17 @@ def draw_dashboard():
     cols = st.columns(len(tickers))
 
     for i, res in enumerate(results):
-        # 1위 종목은 RED, 나머지는 연한 회색
+        # 1위 종목은 RED, 나머지는 연한 회색(D3D3D3)
         is_best = (res['symbol'] == best_symbol)
         line_color = 'red' if is_best else '#D3D3D3'
-        line_width = 3.5 if is_best else 1.5
+        line_width = 4.0 if is_best else 1.5
         
         display_name = f"{res['name']} ({res['weight']}x)" if res['weight'] > 1 else res['name']
         
-        # 상단 지표 (Metric)
+        # 상단 지표 (Metric) - 수익률 순서대로 배치됨
         cols[i].metric(label=display_name, value=f"{res['last_price']:,.2f}", delta=f"{res['last_return']:+.2f}%")
 
-        # 차트 선 추가 (SyntaxError 방지를 위해 한 줄로 작성)
+        # 차트 선 추가
         fig.add_trace(go.Scatter(
             x=res['returns'].index, 
             y=res['returns'],
@@ -99,29 +99,29 @@ def draw_dashboard():
             hovertemplate='<b>' + display_name + '</b><br>수익률: %{y:.2f}%<extra></extra>'
         ))
 
-        # 1위 종목 상단 3% 지점에 표식 추가
+        # 1위 종목 현재 위치 상단 3% 지점에 별도 표식(Star)
         if is_best:
             target_y = res['last_return'] + 3
             fig.add_trace(go.Scatter(
                 x=[res['returns'].index[-1]], y=[target_y],
                 mode='markers+text',
-                marker=dict(size=10, color='red', symbol='star'),
+                marker=dict(size=12, color='red', symbol='star'),
                 text=[f"Top+3%: {target_y:.2f}%"],
                 textposition="top center",
                 showlegend=False
             ))
 
-    # 월요일 첫 봉 리셋 수직선 추가
+    # 월요일 첫 봉 리셋 수직선 추가 (블루 색상)
     for rt in all_reset_times:
-        fig.add_vline(x=rt, line_dash="dash", line_color="#808080", opacity=0.4)
+        fig.add_vline(x=rt, line_dash="dash", line_color="blue", opacity=0.4)
 
     # 0% 기준선
     fig.add_hline(y=0, line_color="black", line_width=1)
 
     fig.update_layout(
         hovermode="x unified", height=700, template='plotly_white',
-        xaxis=dict(tickformat="%m/%d\n%H:%M"),
-        yaxis=dict(title="가중 수익률 (%)", ticksuffix="%"),
+        xaxis=dict(tickformat="%m/%d\n%H:%M", showgrid=False),
+        yaxis=dict(title="가중 수익률 (%)", ticksuffix="%", zeroline=False),
         legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center"),
         margin=dict(l=10, r=10, t=50, b=10)
     )
@@ -131,4 +131,5 @@ def draw_dashboard():
 if __name__ == "__main__":
     draw_dashboard()
     now_str = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
-    st.caption(f"최근 갱신: {now_str} (KST) | 레드 라인: 현재 수익률 1위 | 점선: 주간 리셋(월요일)")
+    st.divider()
+    st.caption(f"최근 갱신: {now_str} (KST) | 🔵 블루 점선: 주간 리셋 | 🔴 레드 라인: 현재 수익률 1위")
