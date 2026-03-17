@@ -9,7 +9,7 @@ import pytz
 st.set_page_config(page_title="주간 수익률 대시보드", layout="wide")
 
 st.title("📊 자산별 주간 수익률 분석")
-st.markdown("##### 🔵 월요일 리셋 (굵은 실선) | 🏆 주중 최고점(HIGH) 동적 표시")
+st.markdown("##### 🔵 월요일 리셋 | 🏆 주중 최고점(HIGH) 2배 가중치 수치 표시")
 
 # 2. 종목 설정
 tickers = {
@@ -22,7 +22,6 @@ tickers = {
 @st.cache_data(ttl=300)
 def load_all_data():
     ticker_symbols = list(tickers.keys())
-    # 15분봉 데이터 호출
     df = yf.download(tickers=ticker_symbols, period='1mo', interval='15m', progress=False)
     return df
 
@@ -42,7 +41,6 @@ def draw_dashboard():
     all_time_high_time = None
     all_time_high_name = ""
 
-    # 데이터 가공 및 수익률 계산
     for symbol, name in tickers.items():
         try:
             if is_multi:
@@ -53,7 +51,7 @@ def draw_dashboard():
             if series.empty: continue
             series.index = series.index.tz_convert('Asia/Seoul')
 
-            # 가중치 설정
+            # 가중치 설정 (기본 가중치)
             weight = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
             
             # 주차별 리셋 지점 (월요일 첫 봉)
@@ -62,11 +60,11 @@ def draw_dashboard():
                 resets = monday_data.groupby([monday_data.index.year, monday_data.index.isocalendar().week]).idxmin()
                 for t in resets: monday_reset_times.add(t)
 
-            # 수익률 계산용 기준가 (매주 첫 거래 데이터)
+            # 수익률 계산용 기준가
             weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
             returns = ((series - weekly_first) / weekly_first * 100) * weight
             
-            # 🚀 [추가] 전체 종목 중 최고점(Peak) 탐색
+            # 주중 최고점(Peak) 탐색
             current_max = returns.max()
             if current_max > all_time_high_val:
                 all_time_high_val = current_max
@@ -79,10 +77,9 @@ def draw_dashboard():
             })
         except: continue
 
-    if not results:
-        return
+    if not results: return
 
-    # 실시간 수익률 기준 내림차순 정렬 (현재 1위 강조용)
+    # 현재 1위 종목 추출
     results.sort(key=lambda x: x['last_return'], reverse=True)
     current_best_symbol = results[0]['symbol']
 
@@ -95,30 +92,29 @@ def draw_dashboard():
         line_width = 4.0 if is_current_best else 1.5
         
         display_name = f"{res['name']} ({res['weight']}x)" if res['weight'] > 1 else res['name']
-        
-        # 상단 Metric
         cols[i].metric(label=display_name, value=f"{res['last_price']:,.2f}", delta=f"{res['last_return']:+.2f}%")
 
-        # 메인 수익률 선
         fig.add_trace(go.Scatter(
-            x=res['returns'].index, 
-            y=res['returns'],
-            mode='lines', 
-            name=display_name,
+            x=res['returns'].index, y=res['returns'],
+            mode='lines', name=display_name,
             line=dict(width=line_width, color=line_color),
             hovertemplate='<b>' + display_name + '</b><br>수익률: %{y:.2f}%<extra></extra>'
         ))
 
-    # 🏆 [동적 표시] 모든 데이터 중 역사적 최고점(All-time High) 지점에 HIGH 표시
+    # 🏆 [수정] All-time High 지점에 2배 가중치 수치 표시
     if all_time_high_time is not None:
+        # 표시할 수치를 2배로 계산
+        weighted_high_val = all_time_high_val * 2
+        
         fig.add_trace(go.Scatter(
             x=[all_time_high_time], 
-            y=[all_time_high_val + 3], # 최고점보다 3% 위에 표시
+            y=[all_time_high_val], # 위치는 실제 최고점 지점
             mode='markers+text',
-            marker=dict(size=12, color='darkred', symbol='triangle-down'),
-            text=[f"★ HIGH: {all_time_high_name}<br>{all_time_high_val:.2f}%"],
+            marker=dict(size=18, color='darkred', symbol='star'),
+            # 텍스트 라벨에만 2배 수치를 표시
+            text=[f"★ HIGH (2x): {all_time_high_name}<br>{weighted_high_val:.2f}%"],
             textposition="top center",
-            textfont=dict(color="darkred", size=14, family="Arial Black"),
+            textfont=dict(color="darkred", size=15, family="Arial Black"),
             showlegend=False
         ))
 
@@ -126,7 +122,6 @@ def draw_dashboard():
     for rt in monday_reset_times:
         fig.add_vline(x=rt, line_dash="solid", line_color="blue", line_width=3, opacity=0.7)
 
-    # 기준선 0%
     fig.add_hline(y=0, line_color="black", line_width=1.5)
 
     fig.update_layout(
@@ -141,4 +136,4 @@ def draw_dashboard():
 
 if __name__ == "__main__":
     draw_dashboard()
-    st.caption(f"🔵 월요일 개장 시점 (굵은 블루선) | 🚩 ★ HIGH: 주중 모든 종목 중 최고 수익률 지점")
+    st.caption("🔵 블루선: 월요일 개장 | 🚩 ★ HIGH (2x): 최고점 지점에 2배 가중치를 적용한 수치 표시")
