@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 1. 페이지 설정
-st.set_page_config(page_title="구리/은 조합 집중 분석", layout="wide")
+st.set_page_config(page_title="조합선 집중 분석 모드", layout="wide")
 
 # 2. 종목 설정
 tickers = {
@@ -46,8 +46,8 @@ def get_clean_data():
     return pd.concat(all_data, axis=1) if all_data else None
 
 def run_app():
-    st.title("📊 구리 & 은 조합선 (수익률 -1% 이상 집중)")
-    st.markdown("##### 🚀 조합선 4종 강조 | 🌫 기초 자산 투명화 | ✂️ -1% 미만 절단")
+    st.title("📊 구리 & 은 조합선 (조합선 외 모두 투명화)")
+    st.markdown("##### ✨ 4가지 조합선만 강조 | 🌫 슈퍼 1등선 & 3등선 투명화 | ✂️ -1% 미만 절단")
 
     df = get_clean_data()
     if df is None: return
@@ -60,61 +60,66 @@ def run_app():
         df['AG_minus_CU'] = s - c
         df['CU_minus_AG'] = c - s
 
-    # --- 🔍 -1% 이상 필터링 (NaN 처리) ---
-    # 모든 컬럼에 대해 -1 미만인 값은 그래프에서 숨깁니다.
+    # --- 🔍 데이터 필터링 (-1% 미만 제거) ---
     df_filtered = df.copy()
     df_filtered[df_filtered < -1.0] = np.nan
 
     fig = go.Figure()
 
-    # 1. 배경: 기초 자산 (투명하게 처리)
+    # 1. 🌫 투명 지표군 (배경 처리: 기초자산)
     for sym, info in tickers.items():
         if sym in df_filtered.columns:
             fig.add_trace(go.Scatter(
                 x=df_filtered.index, y=df_filtered[sym], 
                 name=f"{info['name']} (참고)",
-                opacity=0.05, # 거의 안 보이게 설정
-                line=dict(color='gray', width=1),
-                connectgaps=False,
-                hoverinfo='skip' # 호버에서도 제외
+                opacity=0.03, line=dict(color='gray', width=1),
+                connectgaps=False, hoverinfo='skip'
             ))
 
-    # 2. 🚀 강조: 4가지 구리/은 조합선
+    # 2. 🚀 강조 지표군: 4가지 구리/은 조합선
     combos = [
         ('CU_plus_AG', '➕ 구리 + 은', '#27AE60'),     # 녹색
         ('CU_minus_AG_rev', '➖ -구리 - 은', '#C0392B'), # 빨간색
         ('AG_minus_CU', '📊 은 - 구리', '#2980B9'),     # 파란색
         ('CU_minus_AG', '📊 구리 - 은', '#8E44AD')      # 보라색
     ]
+    
+    combo_cols = [c[0] for c in combos if c[0] in df_filtered.columns]
 
     for col, name, color in combos:
         if col in df_filtered.columns:
             fig.add_trace(go.Scatter(
                 x=df_filtered.index, y=df_filtered[col], 
                 name=name,
-                line=dict(color=color, width=4), # 굵게 강조
+                line=dict(color=color, width=4), 
                 connectgaps=False,
                 hovertemplate=f"<b>{name}</b>: %{{y:.2f}}%<extra></extra>"
             ))
 
-    # 3. 🔥 슈퍼 1등선 (+3%)
-    all_target_cols = [c[0] for c in combos if c[0] in df_filtered.columns]
-    t1_line = df_filtered[all_target_cols].max(axis=1) + 3.0
-    fig.add_trace(go.Scatter(
-        x=df_filtered.index, y=t1_line, name="🔥 슈퍼 1등선 (+3%)",
-        line=dict(color='red', width=2, dash='dot'),
-        connectgaps=False
-    ))
+    # 3. 🌫 투명 지표군 (슈퍼 1등선 & 3등선)
+    if combo_cols:
+        # 슈퍼 1등선 (+3%)
+        t1_line = df_filtered[combo_cols].max(axis=1) + 3.0
+        fig.add_trace(go.Scatter(
+            x=df_filtered.index, y=t1_line, name="🌫 슈퍼 1등선 (투명)",
+            line=dict(color='red', width=1), 
+            opacity=0.05, connectgaps=False, hoverinfo='skip'
+        ))
+        
+        # 3등선 (현재 조합선들 중 3번째로 높은 수익률)
+        # 각 행(시간)별로 정렬하여 3번째 값을 추출
+        t3_line = df_filtered[combo_cols].apply(lambda x: sorted(x.dropna(), reverse=True)[2] if len(x.dropna()) >= 3 else np.nan, axis=1)
+        fig.add_trace(go.Scatter(
+            x=df_filtered.index, y=t3_line, name="🌫 3등선 (투명)",
+            line=dict(color='blue', width=1, dash='dot'), 
+            opacity=0.05, connectgaps=False, hoverinfo='skip'
+        ))
 
     # 레이아웃 설정
     fig.update_layout(
         hovermode="x unified", height=800, template="plotly_white",
         xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M"),
-        yaxis=dict(
-            title="수익률 (%)", 
-            ticksuffix="%", 
-            range=[-1.1, df_filtered.max().max() + 5] # Y축 시작점을 -1 근처로 고정
-        ),
+        yaxis=dict(title="수익률 (%)", ticksuffix="%", range=[-1.1, df_filtered[combo_cols].max().max() + 5]),
         legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
 
@@ -122,4 +127,3 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
-    
