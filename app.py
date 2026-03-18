@@ -5,9 +5,9 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 1. 페이지 설정
-st.set_page_config(page_title="구리/은 복합 수익률 대시보드", layout="wide")
+st.set_page_config(page_title="구리/은 조합 집중 분석", layout="wide")
 
-# 2. 종목 설정 (구리 HG=F, 은 SI=F)
+# 2. 종목 설정
 tickers = {
     'CL=F': {'name': 'WTI 원유', 'color': '#E67E22'},
     'DX-Y.NYB': {'name': '달러지수', 'color': '#34495E'},
@@ -30,8 +30,9 @@ def get_clean_data():
                 mask = ((close.index.weekday == 4) & (close.index.hour >= 14)) | (close.index.weekday >= 5)
                 close.loc[mask] = np.nan
                 
-                # 주간 수익률 (가중치 미적용 순수 % 상태로 먼저 수집)
-                first_price = close.groupby([close.index.year, close.index.isocalendar().week]).transform('first')
+                # 주간 수익률 계산
+                year, week = close.index.year, close.index.isocalendar().week
+                first_price = close.groupby([year, week]).transform('first')
                 ret = ((close - first_price) / first_price * 100)
                 
                 # 가중치 적용 (달러 x5, 구리 x2)
@@ -45,33 +46,40 @@ def get_clean_data():
     return pd.concat(all_data, axis=1) if all_data else None
 
 def run_app():
-    st.title("📊 구리 & 은 복합 수익선 분석")
-    st.markdown("##### 🧪 4가지 조합: (구리+은) | (-구리-은) | (은-구리) | (구리-은)")
+    st.title("📊 구리 & 은 조합선 (수익률 -1% 이상 집중)")
+    st.markdown("##### 🚀 조합선 4종 강조 | 🌫 기초 자산 투명화 | ✂️ -1% 미만 절단")
 
     df = get_clean_data()
     if df is None: return
 
     # --- 🧮 4가지 핵심 수익선 계산 ---
     if 'SI=F' in df.columns and 'HG=F' in df.columns:
-        s = df['SI=F']
-        c = df['HG=F']
-        df['CU_plus_AG']  = c + s   # 1. 구리 + 은
-        df['CU_minus_AG_rev'] = -c - s # 2. -구리 - 은
-        df['AG_minus_CU'] = s - c   # 3. 은 - 구리
-        df['CU_minus_AG'] = c - s   # 4. 구리 - 은
+        s, c = df['SI=F'], df['HG=F']
+        df['CU_plus_AG']  = c + s
+        df['CU_minus_AG_rev'] = -c - s
+        df['AG_minus_CU'] = s - c
+        df['CU_minus_AG'] = c - s
+
+    # --- 🔍 -1% 이상 필터링 (NaN 처리) ---
+    # 모든 컬럼에 대해 -1 미만인 값은 그래프에서 숨깁니다.
+    df_filtered = df.copy()
+    df_filtered[df_filtered < -1.0] = np.nan
 
     fig = go.Figure()
 
-    # 1. 배경: 개별 종목 (아주 연하게)
+    # 1. 배경: 기초 자산 (투명하게 처리)
     for sym, info in tickers.items():
-        if sym in df.columns:
+        if sym in df_filtered.columns:
             fig.add_trace(go.Scatter(
-                x=df.index, y=df[sym], name=f"{info['name']} (원래)",
-                opacity=0.2, line=dict(color=info['color'], width=1),
-                connectgaps=False
+                x=df_filtered.index, y=df_filtered[sym], 
+                name=f"{info['name']} (참고)",
+                opacity=0.05, # 거의 안 보이게 설정
+                line=dict(color='gray', width=1),
+                connectgaps=False,
+                hoverinfo='skip' # 호버에서도 제외
             ))
 
-    # 2. 🚀 요청하신 4가지 복합 수익선 (굵게 강조)
+    # 2. 🚀 강조: 4가지 구리/은 조합선
     combos = [
         ('CU_plus_AG', '➕ 구리 + 은', '#27AE60'),     # 녹색
         ('CU_minus_AG_rev', '➖ -구리 - 은', '#C0392B'), # 빨간색
@@ -80,18 +88,20 @@ def run_app():
     ]
 
     for col, name, color in combos:
-        if col in df.columns:
+        if col in df_filtered.columns:
             fig.add_trace(go.Scatter(
-                x=df.index, y=df[col], name=name,
-                line=dict(color=color, width=3),
-                connectgaps=False
+                x=df_filtered.index, y=df_filtered[col], 
+                name=name,
+                line=dict(color=color, width=4), # 굵게 강조
+                connectgaps=False,
+                hovertemplate=f"<b>{name}</b>: %{{y:.2f}}%<extra></extra>"
             ))
 
-    # 3. 🔥 슈퍼 1등선 (복합선들 포함 전체 중 최고치 + 3%)
-    all_target_cols = [c[0] for c in combos if c[0] in df.columns] + list(tickers.keys())
-    t1_line = df[all_target_cols].max(axis=1) + 3.0
+    # 3. 🔥 슈퍼 1등선 (+3%)
+    all_target_cols = [c[0] for c in combos if c[0] in df_filtered.columns]
+    t1_line = df_filtered[all_target_cols].max(axis=1) + 3.0
     fig.add_trace(go.Scatter(
-        x=df.index, y=t1_line, name="🔥 슈퍼 1등선 (+3%)",
+        x=df_filtered.index, y=t1_line, name="🔥 슈퍼 1등선 (+3%)",
         line=dict(color='red', width=2, dash='dot'),
         connectgaps=False
     ))
@@ -100,7 +110,11 @@ def run_app():
     fig.update_layout(
         hovermode="x unified", height=800, template="plotly_white",
         xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M"),
-        yaxis=dict(title="수익률 합산/차이 (%)", ticksuffix="%"),
+        yaxis=dict(
+            title="수익률 (%)", 
+            ticksuffix="%", 
+            range=[-1.1, df_filtered.max().max() + 5] # Y축 시작점을 -1 근처로 고정
+        ),
         legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
 
@@ -108,3 +122,4 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
+    
