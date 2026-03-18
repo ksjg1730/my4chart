@@ -2,212 +2,139 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
 import numpy as np
 
-# 1. 페이지 설정 (가장 먼저 실행)
+# 1. 페이지 설정
 st.set_page_config(page_title="역대 1등 추적 대시보드", layout="wide")
 
-# 2. 스타일 설정 및 모바일 대응
+# 2. 스타일 및 모바일 대응
 st.markdown(
     """
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         input, select, textarea { font-size: 16px !important; }
-        .stMetric { background-color: white; padding: 10px; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .stMetric { border: 1px solid #f0f2f6; padding: 10px; border-radius: 10px; }
     </style>
     """,
     unsafe_allow_html=True
 )
 
-# 3. 사이드바 - 버전 선택
-st.sidebar.header("📊 설정")
-version = st.sidebar.selectbox("시각화 모드", ["원본 버전", "역대 1등 vs 2등 격차 버전"])
-is_spread_mode = (version == "역대 1등 vs 2등 격차 버전")
+# 3. 사이드바 설정
+st.sidebar.header("📊 시각화 설정")
+version = st.sidebar.selectbox("모드 선택", ["원본 버전", "역대 1등-2등 격차 채우기"])
+is_spread_mode = (version == "역대 1등-2등 격차 채우기")
 
-st.title("📈 자산별 주간 수익률 및 리더보드")
-
+st.title("🛢️ 자산별 주간 수익률 분석")
 if is_spread_mode:
-    st.markdown("##### 🏆 모드: **역대 1등선 추적 및 2등과의 격차 (녹색 채우기)**")
-    st.caption("과거 모든 시점에서 당시 1등이었던 수치를 연결한 선을 '1등선'이라 부릅니다.")
-else:
-    st.markdown("##### 📋 모드: **기본 주간 수익률**")
+    st.markdown("##### 🏆 **1등선 vs 2등선 격차 분석** (녹색 영역 = 선두 그룹의 여유 폭)")
 
-# 4. 종목 설정 (DXY 제외 - 스케일 차이가 너무 커서 격차 분석 시 왜곡됨)
-# 필요시 다시 추가 가능하지만, 1/2등 격차 분석에는 변동성이 비슷한 자산군이 좋습니다.
+# 4. 종목 설정 (골드 대신 원유 'CL=F' 포함)
 tickers_raw = {
     'CL=F': 'WTI 원유 선물',
     'SI=F': '글로벌 은 선물',
-    'GC=F': '골드 선물', # 은과 비교를 위해 골드 추가
+    'DX-Y.NYB': 'DXY 달러지수',
     'SOXX': '필라델피아 반도체'
 }
 
 @st.cache_data(ttl=300)
 def load_all_data():
     ticker_symbols = list(tickers_raw.keys())
-    # 15분봉 데이터 호출
     df = yf.download(tickers=ticker_symbols, period='1mo', interval='15m', progress=False)
-    if df.empty or 'Close' not in df.columns:
-        return None
-    return df['Close'] # 종가 데이터만 추출
+    if df.empty: return None
+    return df['Close']
 
 def draw_dashboard():
     df_close = load_all_data()
-    
-    if df_close is None or df_close.empty:
-        st.error("❌ 데이터를 불러올 수 없습니다. yfinance API 상태를 확인하세요.")
+    if df_close is None:
+        st.error("데이터를 불러오지 못했습니다.")
         return
 
-    # 시간대 변환
     df_close.index = df_close.index.tz_convert('Asia/Seoul')
     
-    # --- [데이터 처리 로직 start] ---
+    # --- [데이터 처리] ---
+    all_returns = []
     
-    all_returns_list = []
-    current_metrics = []
-
-    # 1. 각 종목별 주간 수익률 계산
     for symbol, name in tickers_raw.items():
         if symbol not in df_close.columns: continue
-        
         series = df_close[symbol].dropna()
-        if series.empty: continue
-
-        # 주간(ISO Week) 기준 transform('first')로 주초 가격 계산
-        weekly_first_price = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
         
-        # 기본 수익률 (%)
-        returns = ((series - weekly_first_price) / weekly_first_price * 100)
-        
-        # 시계열 병합을 위해 이름 변경
+        # 주간 수익률 계산 (월요일 리셋 기준)
+        weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
+        # DXY는 변동성이 작으므로 가중치 5배 유지 (필요 없으면 1로 수정 가능)
+        weight = 5 if symbol == 'DX-Y.NYB' else 1
+        returns = ((series - weekly_first) / weekly_first * 100) * weight
         returns.name = symbol
-        all_returns_list.append(returns)
-        
-        # 상단 metric용 데이터 저장
-        current_metrics.append({
-            'name': name,
-            'last_price': series.iloc[-1],
-            'last_return': returns.iloc[-1]
-        })
+        all_returns.append(returns)
 
-    if not all_returns_list:
-        st.warning("분석할 데이터가 충분하지 않습니다.")
-        return
-
-    # 2. 모든 수익률 데이터를 하나의 DataFrame으로 병합 (시간축 정렬)
-    df_returns = pd.concat(all_returns_list, axis=1).ffill() # 결측치는 이전 값으로 채움
+    df_returns = pd.concat(all_returns, axis=1).ffill()
     
-    # 월요일 리셋 지점 추출 (차트 수직선용)
-    monday_indices = df_returns.index[df_returns.index.weekday == 0]
-    # 주가 바뀔 때의 첫 번째 인덱스만 추출
-    monday_reset_times = df_returns.loc[monday_indices].groupby([monday_indices.year, monday_indices.isocalendar().week]).idxmin().iloc[:, 0].unique()
-
-    # --- [상단 메트릭 표시] ---
-    cols = st.columns(len(current_metrics))
-    # 현재 수익률 순으로 정렬하여 표시
-    current_metrics.sort(key=lambda x: x['last_return'], reverse=True)
+    # 상단 지표 (현재 수익률 순)
+    current_res = [{"name": tickers_raw[s], "val": df_returns[s].iloc[-1], "price": df_close[s].iloc[-1]} for s in df_returns.columns]
+    current_res.sort(key=lambda x: x['val'], reverse=True)
     
-    for i, met in enumerate(current_metrics):
-        # 1등에게 왕관 표시
-        label = f"{'🏆 ' if i==0 else ''}{met['name']}"
-        cols[i].metric(
-            label=label,
-            value=f"{met['last_price']:,.2f}",
-            delta=f"{met['last_return']:+.2f}%"
-        )
+    cols = st.columns(len(current_res))
+    for i, res in enumerate(current_res):
+        cols[i].metric(label=f"{'👑 ' if i==0 else ''}{res['name']}", 
+                       value=f"{res['price']:,.2f}", 
+                       delta=f"{res['val']:+.2f}%")
 
-    # --- [그리기 로직] ---
+    # --- [그래프 그리기] ---
     fig = go.Figure()
 
     if is_spread_mode:
-        # --- 🏆 [핵심 로직] 역대 1등선 vs 2등선 격차 시각화 ---
-        
-        # 행(Row) 단위로 값을 정렬하여 1등, 2등 값을 추출
-        # numpy를 사용하는 것이 pandas rank보다 속도가 빠름
+        # 매 순간의 1등값과 2등값 계산
         vals = df_returns.values
-        if vals.shape[1] < 2:
-            st.warning("비교할 자산이 2개 이상 필요합니다.")
-            return
-            
         sorted_vals = np.sort(vals, axis=1)
-        
-        # 가장 우측에 있는 값이 1등, 그 왼쪽이 2등 (오름차순 정렬이므로)
-        top1_line = pd.Series(sorted_vals[:, -1], index=df_returns.index)
-        top2_line = pd.Series(sorted_vals[:, -2], index=df_returns.index)
+        top1_line = sorted_vals[:, -1]
+        top2_line = sorted_vals[:, -2]
 
-        # 1. 배경 종목선들 (회색, 흐리게)
+        # 1. 배경이 되는 개별 종목 선 (연한 회색)
         for symbol in df_returns.columns:
-            name = tickers_raw[symbol]
             fig.add_trace(go.Scatter(
                 x=df_returns.index, y=df_returns[symbol],
-                mode='lines', name=name,
-                line=dict(color='#E6E6E6', width=1),
-                hoverinfo='skip', # 호버 안되게
-                showlegend=True
+                line=dict(color='rgba(200, 200, 200, 0.4)', width=1),
+                name=tickers_raw[symbol], showlegend=True
             ))
 
-        # 2. 녹색 격차 채우기 (2등선 위에 1등선과의 차이를 채움)
+        # 2. 2등선 (채우기의 기준선 역할을 위해 먼저 그림)
         fig.add_trace(go.Scatter(
-            x=top2_line.index, y=top2_line,
-            mode='lines',
-            line=dict(width=0), # 선은 안보이게
+            x=df_returns.index, y=top2_line,
+            line=dict(width=0),
             showlegend=False,
-            hoverinfo='skip'
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=top1_line.index, y=top1_line,
-            mode='lines',
-            name='1등-2등 격차',
-            fill='tonexty', # 바로 이전 trace(2등선)까지 채움
-            fillcolor='rgba(0, 200, 100, 0.3)', # 투명한 녹색
-            line=dict(width=0), # 선은 안보이게
-            hoverinfo='skip'
+            hoverinfo='skip',
+            name='2등선'
         ))
 
-        # 3. 최상위 1등선 (굵은 검은색 실선)
+        # 3. 1등선 + 채우기 (2등선으로부터 1등선까지 녹색 채우기)
         fig.add_trace(go.Scatter(
-            x=top1_line.index, y=top1_line,
-            mode='lines',
-            name='🏆 역대 1등선',
-            line=dict(color='#2C3E50', width=2.5),
-            hovertemplate='<b>당시 1등 수치</b>: %{y:.2f}%<extra></extra>'
+            x=df_returns.index, y=top1_line,
+            line=dict(color='#2ECC71', width=3), # 1등선은 선명한 녹색 실선
+            fill='tonexty', # 직전 trace(2등선)까지 채움
+            fillcolor='rgba(46, 204, 113, 0.25)', # 연한 녹색
+            name='🏆 역대 1등선 (Spread)',
+            hovertemplate='최고 수익률: %{y:.2f}%<extra></extra>'
         ))
 
     else:
-        # --- 📋 기본 모드 (기존 코드와 유사) ---
-        colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'] # Plotly 기본 컬러셋
-        for i, symbol in enumerate(df_returns.columns):
-            name = tickers_raw[symbol]
-            fig.add_trace(go.Scatter(
-                x=df_returns.index, y=df_returns[symbol],
-                mode='lines',
-                name=name,
-                line=dict(width=2, color=colors[i % len(colors)]),
-                hovertemplate='<b>' + name + '</b>: %{y:.2f}%<extra></extra>'
-            ))
+        # 기본 모드
+        for symbol in df_returns.columns:
+            fig.add_trace(go.Scatter(x=df_returns.index, y=df_returns[symbol], name=tickers_raw[symbol]))
 
-    # --- 공통 레이아웃 설정 ---
-    
-    # 월요일 리셋 수직선 (파란 점선)
-    for rt in monday_reset_times:
-        fig.add_vline(x=rt, line_dash="dash", line_color="#5DADE2", line_width=1, opacity=0.7)
-
-    # 0% 기준선
-    fig.add_hline(y=0, line_color="#333", line_width=1)
-
+    # 레이아웃 설정
     fig.update_layout(
-        hovermode="x unified",
-        height=700,
-        template='plotly_white',
-        xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M", showgrid=False),
-        yaxis=dict(title="주간 수익률 (%)", ticksuffix="%", zeroline=False, gridcolor='#F0F0F0'),
-        legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"),
-        margin=dict(l=10, r=10, t=20, b=10)
+        hovermode="x unified", height=750, template='plotly_white',
+        xaxis=dict(showgrid=False, tickformat="%m/%d %H:%M"),
+        yaxis=dict(ticksuffix="%", gridcolor='#f0f0f0'),
+        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
+    
+    # 월요일 리셋선
+    monday_indices = df_returns.index[df_returns.index.weekday == 0]
+    if not monday_indices.empty:
+        reset_days = df_returns.loc[monday_indices].groupby([monday_indices.year, monday_indices.isocalendar().week]).idxmin().iloc[:, 0]
+        for rd in reset_days:
+            fig.add_vline(x=rd, line_dash="dot", line_color="blue", opacity=0.3)
 
     st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     draw_dashboard()
-    st.caption("🔵 파란 점선: 월요일 주초 리셋 시점 | 데이터 출처: Yahoo Finance")
