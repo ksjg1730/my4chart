@@ -1,3 +1,20 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+import numpy as np
+
+# 1. 페이지 설정
+st.set_page_config(page_title="자산별 수익률 대시보드", layout="wide")
+
+# 2. 종목 및 고유 컬러 설정 (채권 -> 구리 'HG=F'로 변경)
+tickers = {
+    'CL=F': {'name': 'WTI 원유', 'color': '#FF9900'},    # 주황색
+    'SI=F': {'name': '글로벌 은', 'color': '#95A5A6'},    # 은색
+    'DX-Y.NYB': {'name': '달러지수', 'color': '#2C3E50'}, # 진회색
+    'HG=F': {'name': '구리(HG=F)', 'color': '#D35400'}    # 구리색(진한 주황)
+}
+
 @st.cache_data(ttl=60)
 def get_clean_data():
     all_data = []
@@ -5,37 +22,98 @@ def get_clean_data():
         try:
             df = yf.download(sym, period='1mo', interval='15m', progress=False)
             if not df.empty:
-                # 데이터가 Series인지 DataFrame인지 확인 후 Close 추출
-                close = df['Close'].copy()
-                if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]
+                # 데이터 구조 대응
+                if isinstance(df.columns, pd.MultiIndex):
+                    close = df['Close'][sym].copy()
+                else:
+                    close = df['Close'].copy()
                 
+                # 한국 시간 변환
                 close.index = close.index.tz_convert('Asia/Seoul')
                 
-                # --- 🕒 주말 및 금요일 14시 이후 데이터 제거 로직 추가 ---
-                # 요일(0:월, 4:금, 5:토, 6:일)과 시간 추출
+                # --- 🕒 금요일 14시 이후 데이터 제거 ---
                 day_of_week = close.index.weekday
                 hour = close.index.hour
-                
-                # 금요일(4)이면서 14시 이상인 데이터 OR 토요일(5) OR 일요일(6) 데이터 마스킹
-                # 이 영역을 NaN으로 만들면 Plotly에서 선이 끊겨서 나옵니다.
-                mask = (day_of_week == 4) & (hour >= 14) | (day_of_week == 5) | (day_of_week == 6)
+                mask = ((day_of_week == 4) & (hour >= 14)) | (day_of_week == 5) | (day_of_week == 6)
                 close.loc[mask] = np.nan
                 
-                # 주간 수익률 계산 (기존 로직 유지)
-                # transform('first')는 NaN을 무시하고 첫 번째 유효한 값을 찾습니다.
-                first_price = close.groupby([close.index.year, close.index.isocalendar().week]).transform('first')
+                # 주간 수익률 계산
+                isoweek = close.index.isocalendar().week
+                year = close.index.year
+                first_price = close.groupby([year, isoweek]).transform('first')
                 
-                weight = 5 if sym == 'DX-Y.NYB' else 1
+                # --- ⚖️ 가중치 적용 로직 ---
+                if sym == 'DX-Y.NYB':
+                    weight = 5
+                elif sym == 'HG=F':
+                    weight = 20  # 구리 수익률 20배 가중치 적용
+                else:
+                    weight = 1
+                
                 ret = ((close - first_price) / first_price * 100) * weight
                 ret.name = sym
                 all_data.append(ret)
-        except Exception as e:
+        except:
             continue
     
     if not all_data: return None
+    return pd.concat(all_data, axis=1)
+
+def run_app():
+    st.title("📊 자산별 수익률 및 슈퍼 1등선")
+    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 구리 x20")
+
+    df = get_clean_data()
+    if df is None:
+        st.error("데이터를 불러올 수 없습니다.")
+        return
+
+    # 마지막 유효 데이터 추출
+    latest = df.ffill().iloc[-1]
     
-    # 여기서 ffill()을 쓰면 제거한 주말 데이터가 다시 채워질 수 있으므로 
-    # concat 후 공통 인덱스만 맞추고 넘깁니다.
-    final_df = pd.concat(all_data, axis=1)
-    return final_df
+    # 상단 지표
+    cols = st.columns(len(tickers))
+    for i, (sym, info) in enumerate(tickers.items()):
+        if sym in latest:
+            cols[i].metric(info['name'], f"{latest[sym]:+.2f}%")
+
+    fig = go.Figure()
+
+    # 1. 종목별 선
+    for sym, info in tickers.items():
+        if sym in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df[sym], name=info['name'],
+                line=dict(color=info['color'], width=2),
+                connectgaps=False,
+                hovertemplate=f"<b>{info['name']}</b>: %{{y:.2f}}%<extra></extra>"
+            ))
+
+    # 2. 🔥 슈퍼 1등선
+    t1_line = df.max(axis=1) + 3.0
+    fig.add_trace(go.Scatter(
+        x=df.index, y=t1_line, name="🔥 슈퍼 1등선 (+3%)",
+        line=dict(color='red', width=2, dash='dot'),
+        connectgaps=False
+    ))
+
+    # 3. 🔵 주간 리셋선
+    df['week_check'] = df.index.isocalendar().week
+    reset_points = df.index[df['week_check'] != df['week_check'].shift(1)]
+    for rp in reset_points:
+        if rp != df.index[0]:
+            fig.add_vline(x=rp, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.4)
+
+    fig.update_layout(
+        hovermode="x unified",
+        height=700,
+        template="plotly_white",
+        xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M"),
+        yaxis=dict(title="수익률 (가중치 적용 %)", ticksuffix="%", gridcolor="#f0f0f0"),
+        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+if __name__ == "__main__":
+    run_app()
