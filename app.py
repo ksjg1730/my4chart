@@ -7,12 +7,12 @@ import numpy as np
 # 1. 페이지 설정
 st.set_page_config(page_title="자산별 수익률 대시보드", layout="wide")
 
-# 2. 종목 및 고유 컬러 설정 (채권 -> 구리 'HG=F'로 변경)
+# 2. 종목 및 고유 컬러 설정
 tickers = {
     'CL=F': {'name': 'WTI 원유', 'color': '#FF9900'},    # 주황색
     'SI=F': {'name': '글로벌 은', 'color': '#95A5A6'},    # 은색
     'DX-Y.NYB': {'name': '달러지수', 'color': '#2C3E50'}, # 진회색
-    'HG=F': {'name': '구리(HG=F)', 'color': '#D35400'}    # 구리색(진한 주황)
+    'HG=F': {'name': '구리(HG=F)', 'color': '#D35400'}    # 구리색
 }
 
 @st.cache_data(ttl=60)
@@ -22,7 +22,7 @@ def get_clean_data():
         try:
             df = yf.download(sym, period='1mo', interval='15m', progress=False)
             if not df.empty:
-                # 데이터 구조 대응
+                # 데이터 구조 대응 (MultiIndex 포함)
                 if isinstance(df.columns, pd.MultiIndex):
                     close = df['Close'][sym].copy()
                 else:
@@ -42,11 +42,11 @@ def get_clean_data():
                 year = close.index.year
                 first_price = close.groupby([year, isoweek]).transform('first')
                 
-                # --- ⚖️ 가중치 적용 로직 ---
+                # --- ⚖️ 가중치 적용 로직 (구리 2배로 수정) ---
                 if sym == 'DX-Y.NYB':
                     weight = 5
                 elif sym == 'HG=F':
-                    weight = 2  # 구리 수익률 20배 가중치 적용
+                    weight = 2  # 구리 수익률 2배 가중치 적용
                 else:
                     weight = 1
                 
@@ -61,14 +61,14 @@ def get_clean_data():
 
 def run_app():
     st.title("📊 자산별 수익률 및 슈퍼 1등선")
-    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 구리 x20")
+    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 구리 x2")
 
     df = get_clean_data()
     if df is None:
         st.error("데이터를 불러올 수 없습니다.")
         return
 
-    # 마지막 유효 데이터 추출
+    # 마지막 유효 데이터 (NaN 제외)
     latest = df.ffill().iloc[-1]
     
     # 상단 지표
@@ -84,7 +84,7 @@ def run_app():
         if sym in df.columns:
             fig.add_trace(go.Scatter(
                 x=df.index, y=df[sym], name=info['name'],
-                line=dict(color=info['color'], width=2),
+                line=dict(color=info['color'], width=2.5), # 선 두께 살짝 보강
                 connectgaps=False,
                 hovertemplate=f"<b>{info['name']}</b>: %{{y:.2f}}%<extra></extra>"
             ))
@@ -97,23 +97,9 @@ def run_app():
         connectgaps=False
     ))
 
-    # 3. 🔵 주간 리셋선
+    # 3. 🔵 주간 리셋선 (수직선)
     df['week_check'] = df.index.isocalendar().week
     reset_points = df.index[df['week_check'] != df['week_check'].shift(1)]
     for rp in reset_points:
         if rp != df.index[0]:
-            fig.add_vline(x=rp, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.4)
-
-    fig.update_layout(
-        hovermode="x unified",
-        height=700,
-        template="plotly_white",
-        xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M"),
-        yaxis=dict(title="수익률 (가중치 적용 %)", ticksuffix="%", gridcolor="#f0f0f0"),
-        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-if __name__ == "__main__":
-    run_app()
+            fig.add_vline(x=rp, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.4
