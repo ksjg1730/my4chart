@@ -47,7 +47,7 @@ def get_clean_data():
                 if sym == 'DX-Y.NYB':
                     weight = 5
                 elif sym == 'TLT':
-                    weight = 20  # 채권 수익률 20배 가중치 적용
+                    weight = 10 # 채권 수익률 20배 가중치 적용
                 else:
                     weight = 1
                 
