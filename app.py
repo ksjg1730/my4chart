@@ -20,109 +20,108 @@ def get_clean_data():
     all_data = []
     for sym, info in tickers.items():
         try:
-            # 데이터 다운로드 (최근 1개월, 15분 단위)
             df = yf.download(sym, period='1mo', interval='15m', progress=False)
             if df.empty: continue
             
-            # Multi-index 처리 및 종가 선택
-            if isinstance(df.columns, pd.MultiIndex):
-                close = df['Close'][sym].copy()
-            else:
-                close = df['Close'].copy()
-
-            # 타임존 처리 (UTC -> Asia/Seoul)
-            if close.index.tz is None:
-                close.index = close.index.tz_localize('UTC')
-            close.index = close.index.tz_convert('Asia/Seoul')
-
-            # 주간 수익률 계산 (매주 월요일 장초반 가격 기준)
-            # ISO week와 Year 기준으로 그룹화하여 첫 번째 가격 추출
-            weeks = close.index.isocalendar().week
-            years = close.index.year
-            first_prices = close.groupby([years, weeks]).transform('first')
+            # Multi-index 및 단일 index 대응
+            close = df['Close'][sym] if isinstance(df.columns, pd.MultiIndex) else df['Close']
             
-            # 가중치 적용 (달러지수는 변동폭이 작으므로 5배 가중치)
+            if close.index.tz is None:
+                close = close.tz_localize('UTC')
+            close = close.tz_convert('Asia/Seoul')
+
+            # 주간 수익률 (월요일 기준 리셋)
+            first_price = close.groupby([close.index.year, close.index.isocalendar().week]).transform('first')
             weight = 5 if sym == 'DX-Y.NYB' else 1
-            ret = ((close - first_prices) / first_prices * 100) * weight
+            ret = ((close - first_price) / first_price * 100) * weight
             ret.name = sym
             all_data.append(ret)
-        except Exception as e:
-            st.warning(f"{sym} 데이터 로드 중 오류: {e}")
-            continue
+        except: continue
     
     if not all_data: return None
-    # 모든 종목 데이터를 하나의 DataFrame으로 병합
-    return pd.concat(all_data, axis=1).ffill()
+    return pd.concat(all_data, axis=1).ffill().dropna()
 
 def run_app():
-    st.title("📊 종목별 수익률 및 슈퍼 1등선")
-    st.markdown("##### 🔴 빨간 실선: 슈퍼 1등선 (+3%) | 🔵 파란 세로선: 주간 리셋 (월요일)")
+    st.title("📊 종목별 수익률 및 주도주 교체 알림")
+    st.markdown("##### ➕ **십자가 표식**: 1등 종목 교체 지점 | 🔴 **빨간선**: 슈퍼 1등선")
 
     df = get_clean_data()
-    if df is None or df.empty:
-        st.error("데이터를 불러올 수 없습니다. API 연결 상태를 확인하세요.")
-        return
+    if df is None: return
 
-    # 최신 데이터 추출
     latest = df.iloc[-1]
     
-    # --- 🚨 알림 로직 ---
-    top_val = latest.max()
-    top_sym = latest.idxmax()
-    if top_val >= 5.0:
-        st.toast(f"🚀 {tickers[top_sym]['name']} 급등 중! ({top_val:.2f}%)", icon="🔥")
-
-    # 상단 지표 (Metric)
-    cols = st.columns(len(tickers))
-    for i, (sym, info) in enumerate(tickers.items()):
-        if sym in latest:
-            cols[i].metric(info['name'], f"{latest[sym]:+.2f}%")
-
-    # --- 📈 그래프 그리기 ---
+    # --- 📈 그래프 구성 ---
     fig = go.Figure()
 
-    # 1. 각 종목별 수익률 선
+    # 1. 각 종목별 선
     for sym, info in tickers.items():
         if sym in df.columns:
             fig.add_trace(go.Scatter(
-                x=df.index, 
-                y=df[sym], 
-                name=info['name'],
+                x=df.index, y=df[sym], name=info['name'],
                 line=dict(color=info['color'], width=2),
                 hovertemplate=f"<b>{info['name']}</b>: %{{y:.2f}}%<extra></extra>"
             ))
 
-    # 2. 🔥 슈퍼 1등선 (실시간 최고 수익률 + 3%)
+    # 2. 🔥 슈퍼 1등선 (+3%)
     t1_line = df.max(axis=1) + 3.0
     fig.add_trace(go.Scatter(
-        x=df.index, 
-        y=t1_line, 
-        name="🔥 슈퍼 1등선 (+3%)",
-        line=dict(color='red', width=3, dash='dot'), # 구분을 위해 점선 스타일 추천
-        hovertemplate="<b>슈퍼 1등선</b>: %{y:.2f}%<extra></extra>"
+        x=df.index, y=t1_line, name="🔥 슈퍼 1등선",
+        line=dict(color='red', width=2, dash='dash'),
+        opacity=0.5
     ))
 
-    # 3. 🔵 월요일 리셋 세로선
-    # 날짜가 바뀌면서 월요일인 지점 찾기
-    reset_dates = df.index[df.index.weekday == 0]
-    if not reset_dates.empty:
-        # 각 주차별 첫 번째 데이터 포인트 추출
-        reset_times = df.loc[reset_dates].groupby([reset_dates.year, reset_dates.isocalendar().week]).apply(lambda x: x.index[0])
-        for rt in reset_times:
-            fig.add_vline(x=rt, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.6)
+    # 3. ➕ 주도주 교체(1등 변경) 지점 찾기 및 표시
+    # 매 시점별 1등 종목의 심볼 찾기
+    leader_series = df.idxmax(axis=1)
+    # 이전 시점과 1등이 달라지는 지점 (True/False)
+    change_mask = leader_series != leader_series.shift(1)
+    # 첫 번째 행은 제외 (비교 대상 없음)
+    change_mask.iloc[0] = False
+    
+    # 교차 지점 데이터 추출
+    cross_points = df[change_mask]
+    
+    for timestamp, row in cross_points.iterrows():
+        new_leader_sym = leader_series[timestamp]
+        current_val = row[new_leader_sym]
+        
+        fig.add_trace(go.Scatter(
+            x=[timestamp],
+            y=[current_val],
+            mode='markers',
+            marker=dict(
+                symbol='cross',
+                size=12,
+                color='black', # 혹은 특정 강조 컬러
+                line=dict(width=2, color='white')
+            ),
+            name=f"교체: {tickers[new_leader_sym]['name']}",
+            showlegend=False,
+            hovertemplate=f"<b>주도주 교체!</b><br>새로운 1등: {tickers[new_leader_sym]['name']}<br>수익률: {current_val:.2f}%<extra></extra>"
+        ))
 
-    # 레이아웃 설정
+    # 4. 세로 리셋선 (월요일)
+    reset_times = df.index[df.index.weekday == 0]
+    if not reset_times.empty:
+        weeks = df.loc[reset_times].index.to_series().dt.isocalendar().week
+        unique_weeks = df.loc[reset_times].groupby([df.loc[reset_times].index.year, weeks]).apply(lambda x: x.index[0])
+        for rt in unique_weeks:
+            fig.add_vline(x=rt, line_width=1, line_color="blue", opacity=0.3)
+
     fig.update_layout(
-        hovermode="x unified",
-        height=650,
-        template="plotly_white",
-        margin=dict(t=50, b=50, l=50, r=50),
-        xaxis=dict(title="시간 (KST)", showgrid=False, tickformat="%m/%d\n%H:%M"),
-        yaxis=dict(title="누적 수익률 (%)", ticksuffix="%", gridcolor="#f0f0f0"),
-        legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center")
+        hovermode="x unified", height=700, template="plotly_white",
+        xaxis=dict(tickformat="%m/%d %H:%M"),
+        yaxis=dict(ticksuffix="%"),
+        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
 
     st.plotly_chart(fig, use_container_width=True)
+    
+    # 하단 알림창
+    if change_mask.any():
+        last_change_time = cross_points.index[-1]
+        last_leader = tickers[leader_series[last_change_time]]['name']
+        st.info(f"💡 최근 주도주 교체: **{last_leader}** ({last_change_time.strftime('%m/%d %H:%M')})")
 
 if __name__ == "__main__":
     run_app()
