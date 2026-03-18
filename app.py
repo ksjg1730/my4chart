@@ -19,14 +19,21 @@ def get_clean_data():
     all_data = []
     for sym, info in tickers.items():
         try:
+            # 1시간봉(1h)으로 최근 2개월치 데이터 호출
             df = yf.download(sym, period='2mo', interval='1h', progress=False)
             if df.empty: continue
+            
+            # Multi-index 대응
             close = df['Close'][sym] if isinstance(df.columns, pd.MultiIndex) else df['Close']
+            
+            # 타임존 설정 (KST)
             if close.index.tz is None: close = close.tz_localize('UTC')
             close = close.index.tz_convert('Asia/Seoul')
 
-            # 주간 리셋 수익률 계산
+            # 주간 수익률 리셋 (월요일 기준)
             first_price = close.groupby([close.index.year, close.index.isocalendar().week]).transform('first')
+            
+            # 가중치 적용
             weight = 5 if sym == 'DX-Y.NYB' else 1
             ret = ((close - first_price) / first_price * 100) * weight
             ret.name = sym
@@ -41,33 +48,35 @@ def run_app():
     st.markdown("##### ⚫ **검정 굵은선**: 4개 종목 수익률의 단순 합계(통합선) | ❌ **적색 십자가**: 주도주 교체")
 
     df = get_clean_data()
-    if df is None: return
+    if df is None:
+        st.error("데이터 로드에 실패했습니다. 인터넷 연결을 확인하세요.")
+        return
 
     # --- 🧮 통합선 계산 (단순 합계) ---
     df['통합'] = df.sum(axis=1)
 
     fig = go.Figure()
 
-    # 1. ⚫ 통합 합산선 (가장 굵게 표시)
+    # 1. ⚫ 통합 합산선 (가장 굵고 진하게)
     fig.add_trace(go.Scatter(
         x=df.index, y=df['통합'], 
-        name="<b>Σ 통합 합산선</b>",
+        name="<b>Σ 통합 합산선 (SUM)</b>",
         line=dict(color='black', width=5),
         hovertemplate="<b>[통합 합계]</b>: %{y:.2f}%<extra></extra>"
     ))
 
-    # 2. 각 개별 종목 수익선
+    # 2. 개별 종목 수익선
     for sym, info in tickers.items():
         if sym in df.columns and sym != '통합':
             fig.add_trace(go.Scatter(
                 x=df.index, y=df[sym], 
                 name=info['name'],
                 line=dict(color=info['color'], width=1.5),
-                opacity=0.6, # 개별선은 약간 투명하게
+                opacity=0.5,
                 hovertemplate=f"{info['name']}: %{{y:.2f}}%<extra></extra>"
             ))
 
-    # 3. ❌ 주도주 교체 지점 (크고 붉게)
+    # 3. ❌ 주도주 교체 지점 (크고 붉은 X 표시)
     leader_series = df.drop(columns=['통합']).idxmax(axis=1)
     change_mask = leader_series != leader_series.shift(1)
     change_mask.iloc[0] = False
@@ -83,30 +92,27 @@ def run_app():
             showlegend=True
         ))
 
-    # 4. 🔥 슈퍼 1등선 (+3%)
-    t1_line = df.drop(columns=['통합']).max(axis=1) + 3.0
-    fig.add_trace(go.Scatter(
-        x=df.index, y=t1_line, name="슈퍼 1등선",
-        line=dict(color='rgba(255,0,0,0.2)', width=1, dash='dot'),
-        hoverinfo='skip'
-    ))
+    # 4. 주간 구분선 (월요일)
+    reset_times = df.index[df.index.weekday == 0]
+    if not reset_times.empty:
+        unique_weeks = df.loc[reset_times].groupby([reset_times.year, reset_times.isocalendar().week]).apply(lambda x: x.index[0])
+        for rt in unique_weeks:
+            fig.add_vline(x=rt, line_width=1, line_color="blue", line_dash="dot", opacity=0.3)
 
-    # 레이아웃 설정
+    # 레이아웃
     fig.update_layout(
         hovermode="x unified", height=800, template="plotly_white",
-        xaxis=dict(title="날짜/시간", tickformat="%m/%d %H:%M"),
-        yaxis=dict(title="수익률 합계 (%)", ticksuffix="%"),
+        xaxis=dict(title="날짜/시간 (KST)", tickformat="%m/%d %H:%M"),
+        yaxis=dict(title="수익률 (%)", ticksuffix="%"),
         legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # 통합 지표 표시
-    c1, c2 = st.columns(2)
+    # 하단 지표
     total_val = df['통합'].iloc[-1]
-    c1.metric("현재 통합 합산 수익률", f"{total_val:+.2f}%")
-    c2.write("💡 **통합선**은 모든 자산의 에너지를 합친 지표로, 시장 전체의 강세를 판단하는 척도가 됩니다.")
+    st.metric("현재 통합 합계 수익률", f"{total_val:+.2f}%", 
+              delta=f"{total_val - df['통합'].iloc[-2]:+.2f}% (직전 1시간 대비)")
 
 if __name__ == "__main__":
     run_app()
-    
