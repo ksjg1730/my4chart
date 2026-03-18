@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -8,12 +7,12 @@ import numpy as np
 # 1. 페이지 설정
 st.set_page_config(page_title="자산별 수익률 대시보드", layout="wide")
 
-# 2. 종목 및 고유 컬러 설정 (반도체 -> 미국채 20년물 TLT로 변경)
+# 2. 종목 및 고유 컬러 설정 (채권 -> 구리 'HG=F'로 변경)
 tickers = {
     'CL=F': {'name': 'WTI 원유', 'color': '#FF9900'},    # 주황색
     'SI=F': {'name': '글로벌 은', 'color': '#95A5A6'},    # 은색
     'DX-Y.NYB': {'name': '달러지수', 'color': '#2C3E50'}, # 진회색
-    'TLT': {'name': '미국채 20년(TLT)', 'color': '#1ABC9C'} # 민트색
+    'HG=F': {'name': '구리(HG=F)', 'color': '#D35400'}    # 구리색(진한 주황)
 }
 
 @st.cache_data(ttl=60)
@@ -46,8 +45,8 @@ def get_clean_data():
                 # --- ⚖️ 가중치 적용 로직 ---
                 if sym == 'DX-Y.NYB':
                     weight = 5
-                elif sym == 'TLT':
-                    weight = 10 # 채권 수익률 20배 가중치 적용
+                elif sym == 'HG=F':
+                    weight = 20  # 구리 수익률 20배 가중치 적용
                 else:
                     weight = 1
                 
@@ -62,13 +61,14 @@ def get_clean_data():
 
 def run_app():
     st.title("📊 자산별 수익률 및 슈퍼 1등선")
-    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 채권 x10")
+    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 구리 x20")
 
     df = get_clean_data()
     if df is None:
         st.error("데이터를 불러올 수 없습니다.")
         return
 
+    # 마지막 유효 데이터 추출
     latest = df.ffill().iloc[-1]
     
     # 상단 지표
