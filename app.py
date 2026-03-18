@@ -5,14 +5,13 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 1. 페이지 설정
-st.set_page_config(page_title="역대 1등 추적 대시보드", layout="wide")
+st.set_page_config(page_title="슈퍼 1등선 대시보드", layout="wide")
 
-# 2. 스타일 및 모바일 대응
+# 2. 스타일 설정
 st.markdown(
     """
     <style>
-        input, select, textarea { font-size: 16px !important; }
-        .stMetric { border: 1px solid #f0f2f6; padding: 10px; border-radius: 10px; }
+        .stMetric { border: 1px solid #f0f2f6; padding: 10px; border-radius: 10px; background-color: #ffffff; }
     </style>
     """,
     unsafe_allow_html=True
@@ -20,14 +19,14 @@ st.markdown(
 
 # 3. 사이드바 설정
 st.sidebar.header("📊 시각화 설정")
-version = st.sidebar.selectbox("모드 선택", ["원본 버전", "역대 1등-2등 격차 채우기"])
-is_spread_mode = (version == "역대 1등-2등 격차 채우기")
+version = st.sidebar.selectbox("모드 선택", ["원본 버전", "슈퍼 1등선 격차 버전"])
+is_super_mode = (version == "슈퍼 1등선 격차 버전")
 
-st.title("🛢️ 자산별 주간 수익률 분석")
-if is_spread_mode:
-    st.markdown("##### 🏆 **1등선 vs 2등선 격차 분석** (녹색 영역 = 선두 그룹의 여유 폭)")
+st.title("🔥 자산별 주간 수익률 분석")
+if is_super_mode:
+    st.markdown("##### 🚀 **슈퍼 1등선 모드**: 매 시점 1등 수치보다 3% 더 높은 붉은 선 표시")
 
-# 4. 종목 설정 (골드 대신 원유 'CL=F' 포함)
+# 4. 종목 설정
 tickers_raw = {
     'CL=F': 'WTI 원유 선물',
     'SI=F': '글로벌 은 선물',
@@ -52,14 +51,12 @@ def draw_dashboard():
     
     # --- [데이터 처리] ---
     all_returns = []
-    
     for symbol, name in tickers_raw.items():
         if symbol not in df_close.columns: continue
         series = df_close[symbol].dropna()
-        
-        # 주간 수익률 계산 (월요일 리셋 기준)
         weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
-        # DXY는 변동성이 작으므로 가중치 5배 유지 (필요 없으면 1로 수정 가능)
+        
+        # 기본 가중치 (DXY 보정)
         weight = 5 if symbol == 'DX-Y.NYB' else 1
         returns = ((series - weekly_first) / weekly_first * 100) * weight
         returns.name = symbol
@@ -67,63 +64,67 @@ def draw_dashboard():
 
     df_returns = pd.concat(all_returns, axis=1).ffill()
     
-    # 상단 지표 (현재 수익률 순)
+    # 상단 지표
     current_res = [{"name": tickers_raw[s], "val": df_returns[s].iloc[-1], "price": df_close[s].iloc[-1]} for s in df_returns.columns]
     current_res.sort(key=lambda x: x['val'], reverse=True)
     
     cols = st.columns(len(current_res))
     for i, res in enumerate(current_res):
-        cols[i].metric(label=f"{'👑 ' if i==0 else ''}{res['name']}", 
+        cols[i].metric(label=f"{'🏆' if i==0 else ''} {res['name']}", 
                        value=f"{res['price']:,.2f}", 
                        delta=f"{res['val']:+.2f}%")
 
     # --- [그래프 그리기] ---
     fig = go.Figure()
 
-    if is_spread_mode:
-        # 매 순간의 1등값과 2등값 계산
+    if is_super_mode:
         vals = df_returns.values
         sorted_vals = np.sort(vals, axis=1)
         top1_line = sorted_vals[:, -1]
         top2_line = sorted_vals[:, -2]
+        
+        # 🎯 1등선보다 3% 더 높은 "슈퍼 붉은 선"
+        super_top_line = top1_line + 3.0
 
-        # 1. 배경이 되는 개별 종목 선 (연한 회색)
+        # 1. 배경 개별 종목 (연한 회색)
         for symbol in df_returns.columns:
             fig.add_trace(go.Scatter(
                 x=df_returns.index, y=df_returns[symbol],
-                line=dict(color='rgba(200, 200, 200, 0.4)', width=1),
-                name=tickers_raw[symbol], showlegend=True
+                line=dict(color='rgba(200, 200, 200, 0.3)', width=1),
+                name=tickers_raw[symbol]
             ))
 
-        # 2. 2등선 (채우기의 기준선 역할을 위해 먼저 그림)
+        # 2. 2등선 (채우기용 바닥)
         fig.add_trace(go.Scatter(
             x=df_returns.index, y=top2_line,
-            line=dict(width=0),
-            showlegend=False,
-            hoverinfo='skip',
-            name='2등선'
+            line=dict(width=0), showlegend=False, hoverinfo='skip'
         ))
 
-        # 3. 1등선 + 채우기 (2등선으로부터 1등선까지 녹색 채우기)
+        # 3. 1등선 + 녹색 채우기 (1등과 2등 사이)
         fig.add_trace(go.Scatter(
             x=df_returns.index, y=top1_line,
-            line=dict(color='#2ECC71', width=3), # 1등선은 선명한 녹색 실선
-            fill='tonexty', # 직전 trace(2등선)까지 채움
-            fillcolor='rgba(46, 204, 113, 0.25)', # 연한 녹색
-            name='🏆 역대 1등선 (Spread)',
-            hovertemplate='최고 수익률: %{y:.2f}%<extra></extra>'
+            line=dict(color='#2ECC71', width=2),
+            fill='tonexty',
+            fillcolor='rgba(46, 204, 113, 0.2)',
+            name='🏆 현재 1등선'
+        ))
+
+        # 4. 🚀 슈퍼 1등선 (붉은색 + 3% 상향)
+        fig.add_trace(go.Scatter(
+            x=df_returns.index, y=super_top_line,
+            line=dict(color='#E74C3C', width=4, dash='solid'),
+            name='🔥 슈퍼 1등선 (+3%)',
+            hovertemplate='슈퍼 타겟: %{y:.2f}%<extra></extra>'
         ))
 
     else:
-        # 기본 모드
         for symbol in df_returns.columns:
             fig.add_trace(go.Scatter(x=df_returns.index, y=df_returns[symbol], name=tickers_raw[symbol]))
 
-    # 레이아웃 설정
     fig.update_layout(
-        hovermode="x unified", height=750, template='plotly_white',
+        hovermode="x unified", height=800, template='plotly_white',
         xaxis=dict(showgrid=False, tickformat="%m/%d %H:%M"),
-        yaxis=dict(ticksuffix="%", gridcolor='#f0f0f0'),
+        yaxis=dict(title="수익률 가중치 (%)", ticksuffix="%", gridcolor='#f0f0f0'),
         legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
     
