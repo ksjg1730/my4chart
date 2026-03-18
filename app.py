@@ -4,40 +4,31 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import pytz
-import streamlit as st
-import streamlit as st
 
-# 사이드바에서 버전 선택
-version = st.sidebar.selectbox("버전 선택", ["원본 버전", "2배 가중치 버전"])
+# 1. 페이지 설정 (가장 먼저 실행되어야 함)
+st.set_page_config(page_title="주간 수익률 대시보드", layout="wide")
 
-if version == "원본 버전":
-    # 기존 코드 실행
-    st.write("기본 모드입니다.")
-else:
-    # 새로운 로직 실행
-    st.write("2배 가중치 모드입니다.")
-# 1. 모바일 확대 방지를 위한 메타 태그 삽입
+# 2. 모바일 확대 방지 및 스타일 설정
 st.markdown(
     """
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
-        /* 추가로 모바일에서 텍스트 입력 시 폰트 크기 때문에 확대되는 것 방지 (iOS 대응) */
-        input, select, textarea {
-            font-size: 16px !important;
-        }
+        input, select, textarea { font-size: 16px !important; }
+        .main { background-color: #f8f9fa; }
     </style>
     """,
     unsafe_allow_html=True
 )
 
-# 기존 코드 (st.set_page_config 등)가 이 아래에 오면 됩니다.
-# 1. 페이지 설정
-st.set_page_config(page_title="주간 수익률 대시보드", layout="wide")
+# 3. 사이드바 설정
+version = st.sidebar.selectbox("🚀 모드 선택", ["원본 버전", "2배 가중치 버전"])
+is_weighted_mode = (version == "2배 가중치 버전")
 
 st.title("📊 자산별 주간 수익률 분석")
-st.markdown("##### 🔵 월요일 리셋 (굵은 실선) | 🏆 실시간 1위 종목 2배 증폭 그래프")
+st.markdown(f"##### 현재 모드: `{'🔥 2배 가중치' if is_weighted_mode else '📋 원본'}`")
+st.markdown("##### 🔵 월요일 리셋 (굵은 실선) | 🏆 실시간 1위 종목 강조")
 
-# 2. 종목 설정
+# 4. 종목 설정
 tickers = {
     'CL=F': 'WTI 원유 선물',
     'SI=F': '글로벌 은 선물',
@@ -48,7 +39,7 @@ tickers = {
 @st.cache_data(ttl=300)
 def load_all_data():
     ticker_symbols = list(tickers.keys())
-    # 15분봉 데이터 호출
+    # 데이터 안정성을 위해 종가(Close) 위주로 가져옴
     df = yf.download(tickers=ticker_symbols, period='1mo', interval='15m', progress=False)
     return df
 
@@ -61,29 +52,30 @@ def draw_dashboard():
 
     results = []
     monday_reset_times = set()
-    is_multi = isinstance(df.columns, pd.MultiIndex)
 
-    # 1. 모든 종목의 기본 수익률 계산
+    # 데이터 구조 파악 (MultiIndex 대응)
     for symbol, name in tickers.items():
         try:
-            if is_multi:
+            if isinstance(df.columns, pd.MultiIndex):
                 series = df['Close'][symbol].dropna()
             else:
                 series = df['Close'].dropna() if len(tickers) == 1 else df[symbol].dropna()
             
             if series.empty: continue
+            
+            # 시간대 변환
             series.index = series.index.tz_convert('Asia/Seoul')
 
-            # 기본 가중치 적용
+            # 기본 가중치 적용 (DXY 등 변동성 보정)
             base_w = 5 if symbol == 'DX-Y.NYB' else (2 if symbol == 'SI=F' else 1)
             
-            # 월요일 리셋 지점 추출 (블루 실선용)
+            # 월요일 리셋 지점 추출
             monday_data = series[series.index.weekday == 0]
             if not monday_data.empty:
                 resets = monday_data.groupby([monday_data.index.year, monday_data.index.isocalendar().week]).idxmin()
                 for t in resets: monday_reset_times.add(t)
 
-            # 주간 수익률 계산 (기본값)
+            # 주간 수익률 계산
             weekly_first = series.groupby([series.index.year, series.index.isocalendar().week]).transform('first')
             raw_returns = ((series - weekly_first) / weekly_first * 100) * base_w
             
@@ -91,70 +83,76 @@ def draw_dashboard():
                 'symbol': symbol, 'name': name, 'returns': raw_returns,
                 'last_val': raw_returns.iloc[-1], 'last_price': series.iloc[-1]
             })
-        except: continue
+        except Exception as e:
+            continue
 
-    if not results: return
+    if not results:
+        st.warning("분석할 데이터가 부족합니다.")
+        return
 
-    # 2. 🚀 실시간 모든 종목 중 가장 높은 수치(1위) 찾기
+    # 1위 종목 찾기
     results.sort(key=lambda x: x['last_val'], reverse=True)
     best_symbol = results[0]['symbol']
 
     fig = go.Figure()
-    cols = st.columns(len(tickers))
+    cols = st.columns(len(results))
 
-    # 3. 그래프 그리기 (1위 종목만 2배 가중치 적용)
     for i, res in enumerate(results):
         is_best = (res['symbol'] == best_symbol)
         
-        # 🏆 1위 종목은 그래프 데이터를 2배로 뻥튀기하여 표시
-        plot_data = res['returns'] * 2 if is_best else res['returns']
+        # 가중치 모드일 경우 1위 종목만 2배 뻥튀기
+        plot_weight = 2.0 if (is_best and is_weighted_mode) else 1.0
+        plot_data = res['returns'] * plot_weight
         
-        line_color = 'red' if is_best else '#D3D3D3'
-        line_width = 5.0 if is_best else 1.5
+        line_color = '#EF553B' if is_best else '#BDC3C7'
+        line_width = 4 if is_best else 1.5
         
         display_name = res['name']
-        if is_best: display_name += " (x2 BOOST)"
+        if is_best and is_weighted_mode: display_name += " (x2 BOOST)"
         
-        # 상단 지표 (수치는 실제 가격 표시)
-        cols[i].metric(label=display_name, value=f"{res['last_price']:,.2f}", 
-                       delta=f"{res['last_val']:+.2f}%" + (" (x2)" if is_best else ""))
+        # 상단 지표 출력
+        cols[i].metric(
+            label=display_name, 
+            value=f"{res['last_price']:,.2f}", 
+            delta=f"{res['last_val']:+.2f}%" + (" (x2)" if is_best and is_weighted_mode else "")
+        )
 
-        # 선 추가
+        # 차트 선 추가
         fig.add_trace(go.Scatter(
             x=plot_data.index, y=plot_data,
             mode='lines', name=display_name,
             line=dict(width=line_width, color=line_color),
-            hovertemplate='<b>' + res['name'] + '</b><br>차트수치: %{y:.2f}%<extra></extra>'
+            hovertemplate='<b>%{text}</b><br>수익률: %{y:.2f}%<extra></extra>',
+            text=[res['name']] * len(plot_data)
         ))
 
-        # 1위 종목 최고점에 HIGH 라벨 표시
+        # 1위 종목 하이라이트 마커
         if is_best:
             fig.add_trace(go.Scatter(
                 x=[plot_data.index[-1]], y=[plot_data.iloc[-1]],
                 mode='markers+text',
-                marker=dict(size=12, color='red', symbol='star'),
-                text=[f"🏆 HIGH: {res['last_val']:+.2f}% x 2"],
-                textposition="top center",
-                textfont=dict(color="red", size=14, family="Arial Black"),
+                marker=dict(size=10, color=line_color),
+                text=[f"🏆 {res['last_val']:+.2f}%"],
+                textposition="top right",
                 showlegend=False
             ))
 
-    # 월요일 리셋 수직선 (블루 굵은 실선)
+    # 기준선 및 레이아웃 설정
     for rt in monday_reset_times:
-        fig.add_vline(x=rt, line_dash="solid", line_color="blue", line_width=3, opacity=0.7)
+        fig.add_vline(x=rt, line_dash="dash", line_color="blue", line_width=1, opacity=0.5)
 
-    fig.add_hline(y=0, line_color="black", line_width=1.5)
+    fig.add_hline(y=0, line_color="black", line_width=1)
 
     fig.update_layout(
-        hovermode="x unified", height=800, template='plotly_white',
+        hovermode="x unified", height=600, template='plotly_white',
         xaxis=dict(tickformat="%m/%d\n%H:%M", showgrid=False),
-        yaxis=dict(title="수익률 가중치 그래프", ticksuffix="%", zeroline=False),
-        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center"),
-        margin=dict(l=10, r=10, t=80, b=10)
+        yaxis=dict(title="수익률 (%)", ticksuffix="%", zeroline=False),
+        legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"),
+        margin=dict(l=10, r=10, t=50, b=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     draw_dashboard()
-    st.caption("🔵 블루 실선: 월요일 리셋 | 🔴 레드 라인: 현재 주간 수익률 1위 (시각화 가중치 2배 적용)")
+    st.caption("ℹ️ 가중치 안내: DXY(x5), 은(x2) 기본 적용 | 선택 모드에 따라 1위 종목 추가 배수 적용")
