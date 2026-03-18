@@ -46,7 +46,7 @@ def get_clean_data():
                 if sym == 'DX-Y.NYB':
                     weight = 5
                 elif sym == 'HG=F':
-                    weight = 5  # 구리 수익률 20배 가중치 적용
+                    weight = 2  # 구리 수익률 20배 가중치 적용
                 else:
                     weight = 1
                 
