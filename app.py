@@ -5,21 +5,21 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 1. 페이지 설정
-st.set_page_config(page_title="슈퍼 1등선 대시보드", layout="wide")
+st.set_page_config(page_title="자산별 수익률 대시보드", layout="wide")
 
-# 2. 사이드바 설정
-st.sidebar.header("⚙️ 설정")
-alert_val = st.sidebar.number_input("알림 기준 수익률 (%)", value=5.0, step=0.5)
-
-# 3. 데이터 로딩 (종목별 개별 호출로 구조적 오류 방지)
-tickers = {'CL=F': '원유', 'SI=F': '은', 'DX-Y.NYB': '달러지수', 'SOXX': '반도체'}
+# 2. 종목 및 고유 컬러 설정
+tickers = {
+    'CL=F': {'name': 'WTI 원유', 'color': '#FF9900'},    # 주황색
+    'SI=F': {'name': '글로벌 은', 'color': '#95A5A6'},    # 은색
+    'DX-Y.NYB': {'name': '달러지수', 'color': '#2C3E50'}, # 진회색
+    'SOXX': {'name': '반도체(SOXX)', 'color': '#3498DB'}  # 파란색
+}
 
 @st.cache_data(ttl=60)
 def get_clean_data():
     all_data = []
-    for sym, name in tickers.items():
+    for sym, info in tickers.items():
         try:
-            # 개별 종목씩 가져와서 구조 오류 차단
             df = yf.download(sym, period='1mo', interval='15m', progress=False)
             if not df.empty:
                 close = df['Close'].copy()
@@ -35,64 +35,69 @@ def get_clean_data():
             continue
     
     if not all_data: return None
-    # 모든 종목을 시간축 기준으로 합치고 빈칸은 앞의 값으로 채움
-    final_df = pd.concat(all_data, axis=1).ffill().dropna()
-    return final_df
+    return pd.concat(all_data, axis=1).ffill().dropna()
 
 def run_app():
-    st.title("🚀 실시간 자산분석 & 슈퍼 1등선")
-    
+    st.title("📊 종목별 수익률 및 슈퍼 1등선")
+    st.markdown("##### 🔴 빨간 실선: 슈퍼 1등선 (+3%) | 🔵 파란 실선: 월요일 리셋")
+
     df = get_clean_data()
-    
-    if df is None or df.empty:
-        st.error("데이터를 가져오지 못했습니다. 인터넷 연결이나 종목 코드를 확인하세요.")
+    if df is None:
+        st.error("데이터 로드 실패")
         return
 
-    # --- 🚨 알림 및 메트릭 ---
+    # --- 🚨 알림 로직 ---
     latest = df.iloc[-1]
     top_sym = latest.idxmax()
-    top_val = latest.max()
+    if latest.max() >= 5.0:
+        st.toast(f"🚀 {tickers[top_sym]['name']} 급등 중!", icon="🔥")
 
-    if top_val >= alert_val:
-        st.toast(f"🔥 {tickers[top_sym]} 기준치 돌파!", icon="⚠️")
-        st.error(f"🚨 알림: {tickers[top_sym]} 현재 {top_val:.2f}% (기준 {alert_val}% 초과)")
-
+    # 상단 지표
     cols = st.columns(len(tickers))
-    for i, (sym, name) in enumerate(tickers.items()):
+    for i, (sym, info) in enumerate(tickers.items()):
         if sym in latest:
-            cols[i].metric(name, f"{latest[sym]:+.2f}%")
+            cols[i].metric(info['name'], f"{latest[sym]:+.2f}%")
 
     # --- 📈 그래프 그리기 ---
     fig = go.Figure()
 
-    # 데이터 정렬 (1등, 2등 추출)
-    vals = df.values
-    sorted_vals = np.sort(vals, axis=1)
-    t1 = sorted_vals[:, -1] # 1등선
-    t2 = sorted_vals[:, -2] # 2등선
-    super_line = t1 + 3.0   # 슈퍼 1등선 (+3%)
+    # 1. 각 종목별 선 (고유 컬러 적용)
+    for sym, info in tickers.items():
+        if sym in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df.index, 
+                y=df[sym], 
+                name=info['name'],
+                line=dict(color=info['color'], width=2),
+                hovertemplate=f"<b>{info['name']}</b>: %{{y:.2f}}%<extra></extra>"
+            ))
 
-    # 1. 배경선 (모든 종목)
-    for sym in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df[sym], name=tickers[sym], 
-                                 line=dict(color='rgba(150,150,150,0.3)', width=1)))
+    # 2. 🔥 슈퍼 1등선 (실시간 1등 + 3%)
+    t1_line = df.max(axis=1) + 3.0
+    fig.add_trace(go.Scatter(
+        x=df.index, 
+        y=t1_line, 
+        name="🔥 슈퍼 1등선 (+3%)",
+        line=dict(color='red', width=4),
+        hovertemplate="<b>슈퍼 1등선</b>: %{y:.2f}%<extra></extra>"
+    ))
 
-    # 2. 채우기 (2등선 -> 1등선)
-    fig.add_trace(go.Scatter(x=df.index, y=t2, line=dict(width=0), showlegend=False, hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=df.index, y=t1, name="현재 1등선", 
-                             fill='tonexty', fillcolor='rgba(0,255,100,0.1)',
-                             line=dict(color='#2ECC71', width=2)))
+    # 3. 🔵 월요일 리셋 실선 추가
+    monday_indices = df.index[df.index.weekday == 0]
+    if not monday_indices.empty:
+        # 주별로 가장 빠른 시간대(장 개장 시점) 추출
+        reset_times = df.loc[monday_indices].groupby([monday_indices.year, monday_indices.isocalendar().week]).idxmin().iloc[:, 0]
+        for rt in reset_times:
+            fig.add_vline(x=rt, line_width=2, line_color="blue", opacity=0.8)
 
-    # 3. 🔥 슈퍼 1등선 (빨간색 강조)
-    fig.add_trace(go.Scatter(x=df.index, y=super_line, name="🔥 슈퍼 1등선 (+3%)",
-                             line=dict(color='red', width=4)))
-
+    # 레이아웃 설정
     fig.update_layout(
         hovermode="x unified",
-        height=650,
+        height=700,
         template="plotly_white",
-        xaxis=dict(showgrid=False),
-        yaxis=dict(ticksuffix="%", gridcolor="#eee")
+        xaxis=dict(title="시간 (KST)", showgrid=False, tickformat="%m/%d %H:%M"),
+        yaxis=dict(title="수익률 (%)", ticksuffix="%", gridcolor="#f0f0f0"),
+        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
     )
 
     st.plotly_chart(fig, use_container_width=True)
