@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 1. 페이지 설정
-st.set_page_config(page_title="자산별 수익률 대시보드", layout="wide")
+st.set_page_config(page_title="자산별 수익률 및 스프레드 대시보드", layout="wide")
 
 # 2. 종목 및 고유 컬러 설정
 tickers = {
@@ -22,13 +22,11 @@ def get_clean_data():
         try:
             df = yf.download(sym, period='1mo', interval='15m', progress=False)
             if not df.empty:
-                # 데이터 구조 대응 (MultiIndex 포함)
                 if isinstance(df.columns, pd.MultiIndex):
                     close = df['Close'][sym].copy()
                 else:
                     close = df['Close'].copy()
                 
-                # 한국 시간 변환
                 close.index = close.index.tz_convert('Asia/Seoul')
                 
                 # --- 🕒 금요일 14시 이후 데이터 제거 ---
@@ -42,11 +40,11 @@ def get_clean_data():
                 year = close.index.year
                 first_price = close.groupby([year, isoweek]).transform('first')
                 
-                # --- ⚖️ 가중치 적용 로직 (구리 2배로 수정) ---
+                # 가중치 적용
                 if sym == 'DX-Y.NYB':
                     weight = 5
                 elif sym == 'HG=F':
-                    weight = 2  # 구리 수익률 2배 가중치 적용
+                    weight = 2
                 else:
                     weight = 1
                 
@@ -60,22 +58,29 @@ def get_clean_data():
     return pd.concat(all_data, axis=1)
 
 def run_app():
-    st.title("📊 자산별 수익률 및 슈퍼 1등선")
-    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 구리 x2")
+    st.title("📊 자산 수익률 및 [은-구리] 스프레드")
+    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🖤 검정 실선: 은 - 구리 스프레드 | ⏳ 금요일 14시 이후 휴식")
 
     df = get_clean_data()
     if df is None:
-        st.error("데이터를 불러올 수 없습니다.")
+        st.error("데이터 로드 실패")
         return
 
-    # 마지막 유효 데이터 (NaN 제외)
+    # --- 📈 스프레드 계산 (은 - 구리) ---
+    if 'SI=F' in df.columns and 'HG=F' in df.columns:
+        df['Spread_SI_HG'] = df['SI=F'] - df['HG=F']
+
     latest = df.ffill().iloc[-1]
     
     # 상단 지표
-    cols = st.columns(len(tickers))
+    cols = st.columns(len(tickers) + 1)
     for i, (sym, info) in enumerate(tickers.items()):
         if sym in latest:
             cols[i].metric(info['name'], f"{latest[sym]:+.2f}%")
+    
+    # 스프레드 지표 추가
+    if 'Spread_SI_HG' in latest:
+        cols[-1].metric("은-구리 차이", f"{latest['Spread_SI_HG']:+.2f}%", delta_color="off")
 
     fig = go.Figure()
 
@@ -84,36 +89,24 @@ def run_app():
         if sym in df.columns:
             fig.add_trace(go.Scatter(
                 x=df.index, y=df[sym], name=info['name'],
-                line=dict(color=info['color'], width=2.5), # 선 두께 살짝 보강
-                connectgaps=False,
-                hovertemplate=f"<b>{info['name']}</b>: %{{y:.2f}}%<extra></extra>"
+                line=dict(color=info['color'], width=1.5, opacity=0.6), # 기존선은 약간 연하게
+                connectgaps=False
             ))
 
-    # 2. 🔥 슈퍼 1등선
-    t1_line = df.max(axis=1) + 3.0
+    # 2. 🖤 은 - 구리 스프레드 선 (강조)
+    if 'Spread_SI_HG' in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['Spread_SI_HG'], 
+            name="📊 은 - 구리 스프레드",
+            line=dict(color='black', width=3), # 두꺼운 검정 실선
+            connectgaps=False,
+            hovertemplate="<b>은-구리 스프레드</b>: %{y:.2f}%<extra></extra>"
+        ))
+
+    # 3. 🔥 슈퍼 1등선
+    # 스프레드 선을 제외한 종목들 중 최대값 + 3%
+    stock_cols = [c for c in df.columns if c in tickers]
+    t1_line = df[stock_cols].max(axis=1) + 3.0
     fig.add_trace(go.Scatter(
         x=df.index, y=t1_line, name="🔥 슈퍼 1등선 (+3%)",
-        line=dict(color='red', width=2, dash='dot'),
-        connectgaps=False
-    ))
-
-    # 3. 🔵 주간 리셋선 (수직선)
-    df['week_check'] = df.index.isocalendar().week
-    reset_points = df.index[df['week_check'] != df['week_check'].shift(1)]
-    for rp in reset_points:
-        if rp != df.index[0]:
-            fig.add_vline(x=rp, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.4)
-
-    fig.update_layout(
-        hovermode="x unified",
-        height=750,
-        template="plotly_white",
-        xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M"),
-        yaxis=dict(title="수익률 (가중치 적용 %)", ticksuffix="%", gridcolor="#f0f0f0"),
-        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-if __name__ == "__main__":
-    run_app()
+        line=dict(color
