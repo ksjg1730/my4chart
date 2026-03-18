@@ -62,7 +62,7 @@ def get_clean_data():
 
 def run_app():
     st.title("📊 자산별 수익률 및 슈퍼 1등선")
-    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 채권 x20")
+    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🔵 파란 점선: 주간 리셋 | ⚖️ 가중치: 달러 x5, 채권 x10")
 
     df = get_clean_data()
     if df is None:
