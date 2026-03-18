@@ -90,7 +90,7 @@ def run_app():
 
     fig = go.Figure()
 
-    # 1. 🌫 배경: 타 자산 (매우 투명하게)
+    # 1. 🌫 배경: 타 자산 (투명하지 않게 색상 적용)
     background_tickers = ['CL=F', 'DX-Y.NYB', 'SI=F']
     for sym in background_tickers:
         if sym in df_filtered.columns:
@@ -98,7 +98,7 @@ def run_app():
             fig.add_trace(go.Scatter(
                 x=df_filtered.index, y=df_filtered[sym], 
                 name=f"{info['name']} (참고)",
-                opacity=0.1, line=dict(color='gray', width=1),
+                opacity=1.0, line=dict(color=info['color'], width=1), # opacity 1.0으로 변경
                 connectgaps=False, hoverinfo='skip'
             ))
 
