@@ -59,7 +59,7 @@ def get_clean_data():
 
 def run_app():
     st.title("📊 자산 수익률 및 [은-구리] 스프레드")
-    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🖤 검정 실선: 은 - 구리 스프레드 | ⏳ 금요일 14시 이후 휴식")
+    st.markdown("##### 🔴 빨간 점선: 슈퍼 1등선 (+3%) | 🖤 검정 실선: 은 - 구리 스프레드")
 
     df = get_clean_data()
     if df is None:
@@ -78,18 +78,18 @@ def run_app():
         if sym in latest:
             cols[i].metric(info['name'], f"{latest[sym]:+.2f}%")
     
-    # 스프레드 지표 추가
     if 'Spread_SI_HG' in latest:
-        cols[-1].metric("은-구리 차이", f"{latest['Spread_SI_HG']:+.2f}%", delta_color="off")
+        cols[-1].metric("은-구리 차이", f"{latest['Spread_SI_HG']:+.2f}%")
 
     fig = go.Figure()
 
-    # 1. 종목별 선
+    # 1. 종목별 선 (에러 수정 지점: opacity 위치 변경)
     for sym, info in tickers.items():
         if sym in df.columns:
             fig.add_trace(go.Scatter(
                 x=df.index, y=df[sym], name=info['name'],
-                line=dict(color=info['color'], width=1.5, opacity=0.6), # 기존선은 약간 연하게
+                opacity=0.5, # 선의 투명도는 여기에 위치해야 합니다.
+                line=dict(color=info['color'], width=1.5), 
                 connectgaps=False
             ))
 
@@ -97,14 +97,13 @@ def run_app():
     if 'Spread_SI_HG' in df.columns:
         fig.add_trace(go.Scatter(
             x=df.index, y=df['Spread_SI_HG'], 
-            name="📊 은 - 구리 스프레드",
-            line=dict(color='black', width=3), # 두꺼운 검정 실선
+            name="📊 은-구리 스프레드",
+            line=dict(color='black', width=3), 
             connectgaps=False,
             hovertemplate="<b>은-구리 스프레드</b>: %{y:.2f}%<extra></extra>"
         ))
 
     # 3. 🔥 슈퍼 1등선
-    # 스프레드 선을 제외한 종목들 중 최대값 + 3%
     stock_cols = [c for c in df.columns if c in tickers]
     t1_line = df[stock_cols].max(axis=1) + 3.0
     fig.add_trace(go.Scatter(
