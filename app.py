@@ -102,4 +102,18 @@ def run_app():
     reset_points = df.index[df['week_check'] != df['week_check'].shift(1)]
     for rp in reset_points:
         if rp != df.index[0]:
-            fig.add_vline(x=rp, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.4
+            fig.add_vline(x=rp, line_width=1.5, line_color="blue", line_dash="dash", opacity=0.4)
+
+    fig.update_layout(
+        hovermode="x unified",
+        height=750,
+        template="plotly_white",
+        xaxis=dict(title="시간 (KST)", tickformat="%m/%d %H:%M"),
+        yaxis=dict(title="수익률 (가중치 적용 %)", ticksuffix="%", gridcolor="#f0f0f0"),
+        legend=dict(orientation="h", y=1.05, x=0.5, xanchor="center")
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+if __name__ == "__main__":
+    run_app()
