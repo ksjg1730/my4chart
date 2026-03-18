@@ -1,3 +1,4 @@
+/////////////////////////////////////////////////////////
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -208,4 +209,4 @@ def draw_dashboard():
 if __name__ == "__main__":
     draw_dashboard()
     now_str = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
-    st.caption(f"최근 갱신: {now_str} (KST) | 데이터: 15분봉 | 기준: 매주 첫 거래 데이터")
+    st.caption(f"최근 갱신: {now_str} (KST) | 데이터: 15분봉 | 기준: 매주 첫 거래 
